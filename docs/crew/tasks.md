@@ -2,62 +2,75 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 版本 | 1 |
+| 版本 | 2 |
 | 日期 | 2026-08-20 |
-| 依据 | `docs/crew/prd.md` 版本 2、`docs/crew/hld.md` 版本 1 |
+| 依据 | `docs/crew/prd.md` 版本 3、`docs/crew/hld.md` 版本 2 |
 
-## 读这张表之前要知道的三条规则
+**版本 2 改了什么。** `assetsindex-shotplan.md` 升到版本 4（一个 clip 一个 JSON、`fromYou` 和 `fromMachine` 分节、描述按时间段、人类输入源清单、三层漏斗）。任务跟着重排：`M2` 从 2 个任务变成 3 个，`M4` 从 1 个变成 2 个，后面的编号顺移。`T-01` 已完成，不受影响。
+
+## 读这张表之前要知道的四条规则
 
 1. **两个任务绝不拥有同一个文件。** 工程师同时开工，共用文件会互相覆盖。
-2. **`T-01` 是走通骨架，单独跑，别的任务全部等它。** 它是唯一允许同时拥有边界两侧文件的任务。它做完之后，后面的任务**不准再改它拥有的文件**。
-3. **测试命令只有一条。** `T-01` 在 `package.json` 的 `test` 脚本里把它定下来，之后每个任务都用同一条 `npm test`，不准自己另起一套。
+2. **`T-01` 是走通骨架，已完成。** 后面的任务**不准再改它拥有的文件**，只有一处例外，写在 `T-10` 那一行。
+3. **测试命令只有一条。** `T-01` 在 `package.json` 的 `test` 脚本里定下了，之后每个任务都用同一条 `npm test`，不准自己另起一套。
 4. **每个代码任务都是测试先行。** 先写一个失败的测试，确认它是因为功能缺失而失败，再写最小的代码让它通过。报告里必须有失败的那次输出，再有通过的那次。没有失败输出的报告不算完成。
 
 ## 任务表
 
 | 任务 | 里程碑 | 做什么 | 拥有的文件 | 依赖 | 契约 | 怎么验收 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `T-01` | M1 | **走通骨架。** 一句文本 → 调外部命令出一个音频 → 裁静音、量真实时长 → 把一段素材裁到这个时长 → 混进旁白 → 烧上这一句字幕 → 出一个能播的 `mp4`。同时实现工作文件的完整分节独占读写（七节都要，不只是 `voice` 和 `render`），因为后面每个任务都要用它，而且不准再改它。它还一次写完整个 `package.json`（含指向 `cordis.patch.yml` 的 `dsh.bundle` 字段），这样 `T-08` 不必回头改这个文件 | `package.json`<br>`src/flow/job.js`<br>`src/voice/engine.js`<br>`src/voice/engines/default.js`<br>`src/render/segment.js`<br>`test/t01-walk.test.js` | 无 | `flow-stages.md`（两侧）<br>`voice-engine.md`（两侧） | `A-10` `A-11` `A-13` `A-14`，加两个契约测试 |
-| `T-02` | M2 | 索引文件的读、写、和"人的修改绝不能被机器盖掉"那张规则表。**只做文件逻辑，不调视频理解** | `src/assets-index/store.js`<br>`test/assets-index-store.test.js` | `T-01` | `assetsindex-shotplan.md`（被调侧） | `A-3`，加被调侧契约测试 |
-| `T-03` | M2 | 扫素材文件夹，对新的或变过的素材调视频理解，把结果交给 `store.js` 写进索引。理解失败的那一条跳过并记下，不中断整次入库 | `src/assets-index/scan.js`<br>`test/assets-index-scan.test.js` | `T-02` | `assetsindex-shotplan.md` | `A-1` `A-2` |
-| `T-04` | M3 | 停点 1：拿到想法先提至少 3 个问题，收到回答前不写文稿。停点 2：把想法和回答展开成按句编号的文稿，写进工作文件的 `script` 节 | `src/script/interview.js`<br>`src/script/write.js`<br>`test/script.test.js` | `T-01` | `flow-stages.md` | `A-4` `A-5` |
-| `T-05` | M4 | 为每句挑一段素材，写出画面对应表。挑不到的句子进缺素材报告。`confidence` 是 `low` 的素材只在没有 `high` 可用时才用，用了要在报告里说明 | `src/shotplan/plan.js`<br>`test/shotplan.test.js` | `T-02` `T-04` | `assetsindex-shotplan.md`（调用侧）<br>`flow-stages.md` | `A-6` `A-7`，加调用侧契约测试 |
-| `T-06` | M5 | 编排：决定下一步跑哪个阶段，在四个停点停住等回答，中途退出后能从原地续跑。跑完确认五样中间产物齐全 | `src/flow/run.js`<br>`test/flow-run.test.js` | `T-01` `T-03` `T-04` `T-05` | `flow-stages.md` | `A-5` `A-12` |
-| `T-07` | M5 | 逐句配音循环、把逐句音频拼成一条纯音频给停点 4、分批拼接（单次上限 20 段）、横屏和竖屏两套字幕规则（竖屏字号更大、每行更少字、位置更高） | `src/voice/speak.js`<br>`src/render/concat.js`<br>`src/render/subtitle.js`<br>`test/render-concat.test.js`<br>`test/subtitle.test.js` | `T-01` | `flow-stages.md` | `A-8` `A-9` `A-16` `A-17` `A-18` |
-| `T-08` | M5 | 装成 dsh 插件：挂载入口和 `cordis.patch.yml`，加英文和中文两份 README。**README 必须写数据流披露**：自带的默认语音引擎会把旁白文字发到微软的服务器（`node-edge-tts` 用的是 Edge 在线朗读服务）。这是本项目引入的第一个联网行为，用户有权在装之前知道，并且要写清怎么换成本地引擎。参照 `dsh-video-understand` 的 L0/L1/L2 披露表的做法。**要把 `dsh.bundle` 字段加回 `package.json`**——`0.1.0` 发布时故意移除了它，因为 `dsh-app-boot` 在读不到 bundle 的 patch 文件时会直接抛错（`dsh-app-boot/lib/index.js:811`），提前声明会让别人的整个 dsh profile 启动不了。这是 `T-08` 唯一允许改 `T-01` 文件的一处，理由写在这里 | `host/narrate.js`<br>`cordis.patch.yml`<br>`README.md`<br>`README-zh.md` | `T-06` | 无 | `A-15` |
+| `T-01` | M1 | **走通骨架（已完成）。** 一句文本 → 调外部命令出一个音频 → 裁静音、量真实时长 → 把一段素材裁到这个时长 → 混进旁白 → 烧上这一句字幕 → 出一个能播的 `mp4`。同时实现工作文件的完整分节独占读写（七节都要），并一次写完整个 `package.json` | `package.json`<br>`src/flow/job.js`<br>`src/voice/engine.js`<br>`src/voice/engines/default.js`<br>`src/render/segment.js`<br>`test/t01-walk.test.js` | 无 | `flow-stages.md`（两侧）<br>`voice-engine.md`（两侧） | `A-10` `A-11` `A-13` `A-14`，加两个契约测试 |
+| `T-02` | M2 | clip 描述文件的读和写。`fromYou` 和 `fromMachine` 两节的分工：写接口只接受 `fromMachine`，签名里根本没有写整个文件的入口。三个防护：同文件夹去扩展名同名报 `E_STEM_COLLISION`；没有 `schema` 标记的 JSON 报 `E_FOREIGN_JSON` 且**一个字节都不写**；文件坏了报 `E_CLIP_JSON_UNREADABLE` 且不覆盖 | `src/assets-index/clip-file.js`<br>`test/clip-file.test.js` | `T-01` | `assetsindex-shotplan.md`（被调侧） | `A-3` `A-19` `A-20`，加被调侧契约测试 |
+| `T-03` | M2 | 人类输入源翻译成 `fromYou`。六个读取器：跟插件说、你手改的 `fromYou`、同名 `.narrate.txt`、`clips.csv`、文件名切词、文件夹名。按优先级取 `description`，`tags` 取并集去重，`notes` 原样不解析，`sources` 记来源。**必须可重跑且结果一样** | `src/assets-index/from-you.js`<br>`test/from-you.test.js` | `T-02` | `assetsindex-shotplan.md` | `A-21` `A-22` `A-23` |
+| `T-04` | M2 | 扫素材文件夹，对新的或指纹变过的 clip 调视频理解，把结果切成时间段写进 `fromMachine`，并记下 `visualSearchDir`。理解失败的那一条跳过并记下，**不中断整次入库** | `src/assets-index/scan.js`<br>`test/scan.test.js` | `T-02` `T-03` | `assetsindex-shotplan.md` | `A-1` `A-2` |
+| `T-05` | M3 | 停点 1：拿到想法先提至少 3 个问题，收到回答前不写文稿。停点 2：把想法和回答展开成按句编号的文稿，写进工作文件的 `script` 节 | `src/script/interview.js`<br>`src/script/write.js`<br>`test/script.test.js` | `T-01` | `flow-stages.md` | `A-4` `A-5` |
+| `T-06` | M4 | 三层漏斗挑候选。第 1 层按时长排除盖不住这句的；第 2 层用 `description`、`tags`、`notes` 词重叠留候选；第 3 层把这句翻成一句英文画面描述，交给画面搜索定到第几秒。第 3 层可选：`visualSearchDir` 不存在时**退回前两层，不报错** | `src/shotplan/candidates.js`<br>`test/candidates.test.js` | `T-02` `T-05` | `assetsindex-shotplan.md`（调用侧） | `A-24` `A-25` `A-26`，加调用侧契约测试 |
+| `T-07` | M4 | 分配和成表。用过的素材降权，相邻两句不来回切同两段素材。写出画面对应表；挑不到的句子进缺素材报告；用了 `confidence: low` 的要在报告里说明 | `src/shotplan/assign.js`<br>`test/assign.test.js` | `T-06` | `assetsindex-shotplan.md`<br>`flow-stages.md` | `A-6` `A-7` `A-27` |
+| `T-08` | M5 | 编排：决定下一步跑哪个阶段，在四个停点停住等回答，中途退出后能从原地续跑。跑完确认中间产物齐全 | `src/flow/run.js`<br>`test/flow-run.test.js` | `T-04` `T-05` `T-07` | `flow-stages.md` | `A-5` `A-12` |
+| `T-09` | M5 | 逐句配音循环、把逐句音频拼成一条纯音频给停点 4、分批拼接（单次上限 20 段）、横屏和竖屏两套字幕规则（竖屏字号更大、每行更少字、位置更高） | `src/voice/speak.js`<br>`src/render/concat.js`<br>`src/render/subtitle.js`<br>`test/render-concat.test.js`<br>`test/subtitle.test.js` | `T-01` | `flow-stages.md` | `A-8` `A-9` `A-16` `A-17` `A-18` |
+| `T-10` | M5 | 装成 dsh 插件：挂载入口和 `cordis.patch.yml`，更新英文和中文两份 README。**要把 `dsh.bundle` 字段加回 `package.json`**——`0.1.0` 发布时故意移除了它，因为 `dsh-app-boot` 在读不到 bundle 的 patch 文件时会直接抛错（`dsh-app-boot/lib/index.js:811`），提前声明会让别人的整个 dsh profile 启动不了。这是唯一允许改 `T-01` 文件的一处，理由写在这里 | `host/narrate.js`<br>`cordis.patch.yml`<br>`package.json`（只加 `dsh` 一节）<br>`README.md`<br>`README-zh.md` | `T-08` | 无 | `A-15` |
 
 ## 每个验收检查由哪个任务交付
 
 | 检查 | 任务 | 检查 | 任务 |
 | --- | --- | --- | --- |
-| `A-1` | `T-03` | `A-10` | `T-01` |
-| `A-2` | `T-03` | `A-11` | `T-01` |
-| `A-3` | `T-02` | `A-12` | `T-06` |
-| `A-4` | `T-04` | `A-13` | `T-01` |
-| `A-5` | `T-04` `T-06` | `A-14` | `T-01` |
-| `A-6` | `T-05` | `A-15` | `T-08` |
-| `A-7` | `T-05` | `A-16` | `T-07` |
-| `A-8` | `T-07` | `A-17` | `T-07` |
-| `A-9` | `T-07` | `A-18` | `T-07` |
+| `A-1` | `T-04` | `A-15` | `T-10` |
+| `A-2` | `T-04` | `A-16` | `T-09` |
+| `A-3` | `T-02` | `A-17` | `T-09` |
+| `A-4` | `T-05` | `A-18` | `T-09` |
+| `A-5` | `T-05` `T-08` | `A-19` | `T-02` |
+| `A-6` | `T-07` | `A-20` | `T-02` |
+| `A-7` | `T-07` | `A-21` | `T-03` |
+| `A-8` | `T-09` | `A-22` | `T-03` |
+| `A-9` | `T-09` | `A-23` | `T-03` |
+| `A-10` | `T-01` ✅ | `A-24` | `T-06` |
+| `A-11` | `T-01` ✅ | `A-25` | `T-06` |
+| `A-12` | `T-08` | `A-26` | `T-06` |
+| `A-13` | `T-01` ✅ | `A-27` | `T-07` |
+| `A-14` | `T-01` ✅ | | |
 
-18 条检查全部有任务交付，没有一条落空。
+27 条检查全部有任务交付，没有一条落空。
 
 ## 跑的顺序
 
 ```
-M1:  T-01  （单独跑，全部等它）
-M2:  T-02 → T-03
-M3:  T-04              ← 可以和 M2 并行吗？不行。里程碑之间要停下来问用户
-M4:  T-05
-M5:  T-06 、 T-07  （两个可以同时跑，文件不重叠） → T-08
+M1:  T-01 ✅（已完成并提交）
+M2:  T-02 → T-03 → T-04
+M3:  T-05
+M4:  T-06 → T-07
+M5:  T-08 、 T-09（两个可以同时跑，文件不重叠） → T-10
 ```
 
 里程碑之间必须停下来等用户回答。就算文件不重叠也不准提前开工——停点的意义就是让用户早点看到方向。
 
+`M2` 里 `T-03` 和 `T-04` 都依赖 `T-02`，但它们**互相不依赖**，文件也不重叠，所以理论上能并行。实际上 `T-04` 要用 `T-03` 的结果来判断"这个 clip 的人类输入变了没有"，所以还是顺着做。
+
 ## 我认为还弱的地方
 
-1. **`T-01` 拥有 `src/flow/job.js`，而后面四个任务都要用它。** 如果 `T-01` 实现的分节读写不够完整，后面的任务会被卡住，而它们不准改这个文件。所以 `T-01` 的验收里必须包含"七节都能读、都能写、写别人的节会抛 `E_WRITE_FOREIGN_SECTION`"，不能只做 `voice` 和 `render` 两节。
-2. **`T-05` 挑素材的质量没法用自动测试保证。** 测试只能证明"能配上的配上了、配不上的报出来"，不能证明"配得好看"。这一条只能靠停点 3 由用户判断。
-3. **PRD 的 `Q-6` 没定**（素材不够长时循环、定格还是放慢），会卡住 `T-07` 的一部分。`T-01` 不受影响，因为骨架用一段足够长的素材。
-4. **`A-11` 里"画面上的字确实是那几个字"没法完全自动测。** 自动测试能证明画的是真字形不是方块（笔画多的字墨量明显多于笔画少的字），也能证明字幕文件内容和文稿一致。但"渲染出来的像素就是这几个字"要人眼看。这一条靠里程碑评审兜。
-5. **默认语音引擎会联网，把旁白文字发给微软。** `T-08` 必须在 README 里披露，见它的任务行。
+1. **`T-06` 挑素材的质量没法用自动测试保证。** 测试只能证明"能配上的配上了、配不上的报出来、时长过滤生效、画面搜索缺失时会退回"，不能证明"配得好看"。这一条只能靠停点 3 由用户判断。
+2. **`T-07` 的分配算法还没定死。** "用过的降权"要降多少、"相邻不来回切"看几句范围，这些数字现在是空的。建议 `T-07` 开工时先做最笨的版本（用过一次就降一半权重、只看前一句），跑一条真视频看效果再调。不要提前设计。
+3. **PRD 的 `Q-6` 没定**（素材不够长时循环、定格还是放慢），会卡住 `T-09` 的一部分。`T-01` 不受影响，因为骨架用一段足够长的素材。
+4. **PRD 的 `Q-5` 现在只卡第 3 层漏斗。** 画面搜索需要那 2 GB 的向量层。不装也能跑，只是挑素材靠文字，质量差一些。这已经不再是一个阻塞问题，而是一个质量选项——契约版本 4 把它设计成了可退回的。
+5. **`A-11` 里"画面上的字确实是那几个字"没法完全自动测。** 自动测试能证明画的是真字形不是方块（笔画多的字墨量明显多于笔画少的字），也能证明字幕文件内容和文稿一致。但"渲染出来的像素就是这几个字"要人眼看。这一条靠里程碑评审兜。
+6. **默认语音引擎会联网，把旁白文字发给微软。** 已在 `README.md` 和 `README-zh.md` 的隐私一节披露，`T-10` 更新 README 时不许删掉那一节。
+7. **中文文件名不分词。** `服务器机柜-特写` 能切出三个词，`服务器机柜特写` 只算一个。`T-03` 的文件名读取器只能做到这个程度，不要指望它。
