@@ -72,6 +72,12 @@ changed together.
 Job state lives outside the repository, in `~/.dsh/crew/jobs/dsh-narrate/state.json`, so
 `git status` stays clean.
 
+**Work on `main`.** The crew method asks for a `crew/<job>` work branch, and this repository
+had one until it was deleted: `main` was fast-forwarded to match it after every milestone, so
+the two were always the same commit, every push was two pushes, and one commit spent four CI
+jobs where two would do. The reason a work branch exists — keeping unreviewed work off `main`
+— does not apply when the owner reviews at every milestone anyway.
+
 **A task owns its files.** `docs/crew/tasks.md` lists which task owns which file, and two
 tasks never own the same one. There is exactly one documented exception, and the reason is
 written in the task row. When a contract in `docs/crew/api/` changes, raise its version at
