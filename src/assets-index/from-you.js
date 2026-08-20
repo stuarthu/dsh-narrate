@@ -1,0 +1,234 @@
+// 把你的输入翻译成 `fromYou` 那一节。契约：docs/crew/api/assetsindex-shotplan.md 版本 5
+//
+// 你可以用任何顺手的方式写素材的描述和标签。这个模块负责把它们收拢成一种格式。
+// "任何方式"的真实含义是下面这组读取器，可以一个个加。
+//
+// 两条规则最要紧：
+//   1. **可重跑。** 输入源一个字没改，重跑一遍结果必须一字不差。否则你会发现
+//      自己写的描述莫名变了，然后再也不敢信这个工具。
+//   2. **手改不能丢。** 手改只存在于输出文件里，不存在于任何输入源，所以它是
+//      "推导不出来的值"。推导不出来就说明是你写的，标成 manual，从此粘住。
+import { readFile } from 'node:fs/promises';
+import { basename, dirname, join, parse, relative, sep } from 'node:path';
+
+import { readClipFile } from './clip-file.js';
+
+/** 越明确的越优先，数字越小赢。 */
+export const PRIORITY = Object.freeze({
+  chat: 1,
+  manual: 2,
+  sidecar: 3,
+  csv: 4,
+  filename: 5,
+  folder: 6,
+});
+
+const CSV_NAME = 'clips.csv';
+const SIDECAR_SUFFIX = '.narrate.txt';
+
+export class FromYouError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'FromYouError';
+    this.code = code;
+  }
+}
+
+const clean = (s) => String(s ?? '').trim();
+const nonEmpty = (list) => list.map(clean).filter((x) => x !== '');
+
+/** 纯数字不当标签：`bench-001-4k` 里的 `001` 没有信息。 */
+const usefulTag = (t) => t !== '' && !/^\d+$/.test(t);
+
+// ── 读取器。每个返回 { kind, source, description, tags, notes } 或 null ────
+
+/** 文件夹名。只取 assets 根目录**以下**的部分，否则每个素材都会背上 home、你的用户名。 */
+function readFolder(clipPath, assetsRoot) {
+  const rel = relative(assetsRoot, dirname(clipPath));
+  if (rel === '' || rel.startsWith('..')) return null;
+  const tags = rel.split(sep).map(clean).filter(usefulTag);
+  if (tags.length === 0) return null;
+  return { kind: 'folder', source: `folder:${rel}`, description: '', tags, notes: '' };
+}
+
+/** 文件名。按连字符、下划线、空格切词。中文不分词，这是真实限制。 */
+function readFilename(clipPath) {
+  const tags = parse(clipPath).name.split(/[-_\s]+/).map(clean).filter(usefulTag);
+  if (tags.length === 0) return null;
+  return { kind: 'filename', source: `filename:${basename(clipPath)}`, description: '', tags, notes: '' };
+}
+
+/** 同名文本：第一行是描述，`#` 开头的行是标签，其余的行原样进 notes。 */
+async function readSidecar(clipPath) {
+  const path = `${clipPath}${SIDECAR_SUFFIX}`;
+  let text;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw new FromYouError('E_SOURCE_UNREADABLE', `读不到 ${path}：${error.code}`);
+  }
+  let description = '';
+  const tags = [];
+  const noteLines = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (clean(line) === '') continue;
+    if (line.trimStart().startsWith('#')) {
+      // 只有整行以 # 开头才算标签行。句子中间的 # 是普通文字。
+      for (const m of line.matchAll(/#(\S+)/g)) if (usefulTag(m[1])) tags.push(m[1]);
+      continue;
+    }
+    if (description === '') description = clean(line);
+    else noteLines.push(line);
+  }
+  return {
+    kind: 'sidecar',
+    source: `sidecar:${basename(path)}`,
+    description,
+    tags,
+    notes: noteLines.join('\n'),
+  };
+}
+
+/** 引号感知的极简 CSV 解析。引号里的逗号和换行都算内容。 */
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c !== '"') field += c;
+      else if (text[i + 1] === '"') { field += '"'; i += 1; }
+      else inQuotes = false;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+    else if (c !== '\r') field += c;
+  }
+  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+/**
+ * 把 `clips.csv` 解析成行。一个文件夹几百个素材，每个都重解析一遍是白做的功，
+ * 所以调用方（扫描那一步）可以先调这个，把结果传给每次翻译。
+ * 没有这个文件就返回空数组，不是错误。
+ */
+export async function loadCsvRows(assetsRoot) {
+  const path = join(assetsRoot, CSV_NAME);
+  try {
+    return parseCsv(await readFile(path, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw new FromYouError('E_SOURCE_UNREADABLE', `读不到 ${path}：${error.code}`);
+  }
+}
+
+/** 表格：三列，文件名、描述、标签（分号隔开）。表头对不上任何文件名，所以会自动跳过。 */
+async function readCsv(clipPath, assetsRoot, csvRows) {
+  const rows = csvRows ?? (await loadCsvRows(assetsRoot));
+  if (rows.length === 0) return null;
+  const me = basename(clipPath);
+  const mine = rows.filter((row) => clean(row[0]) === me);
+  if (mine.length === 0) return null;
+
+  const descriptions = [...new Set(nonEmpty(mine.map((row) => row[1])))];
+  if (descriptions.length > 1) {
+    throw new FromYouError(
+      'E_SOURCE_CONFLICT',
+      `${CSV_NAME} 里 ${me} 有 ${mine.length} 行，描述不一致：${descriptions.map((d) => `「${d}」`).join(' 和 ')}。` +
+        '请删掉多余的行。',
+    );
+  }
+  const tags = mine.flatMap((row) => String(row[2] ?? '').split(/[;；]/)).map(clean).filter(usefulTag);
+  return { kind: 'csv', source: `csv:${CSV_NAME}`, description: descriptions[0] ?? '', tags, notes: '' };
+}
+
+/** 你跟插件说的话。 */
+function readChat(chat) {
+  if (!chat) return null;
+  const tags = nonEmpty(chat.tags ?? []).filter(usefulTag);
+  const description = clean(chat.description);
+  const notes = clean(chat.notes);
+  if (description === '' && notes === '' && tags.length === 0) return null;
+  return {
+    kind: 'chat',
+    source: chat.date ? `chat:${chat.date}` : 'chat',
+    description,
+    tags,
+    notes,
+  };
+}
+
+// ── 合并 ──────────────────────────────────────────────────────────────
+
+/**
+ * 收拢一段素材的 `fromYou`。
+ *
+ * `sources` 列出**每个找到了东西的读取器**，不管它有没有赢。这样你能看出插件
+ * 去哪些地方看过、看到了什么，而且这个列表是确定的，重跑不会变。
+ *
+ * 已知限制：出处是整节级别的，不是逐字段的。如果描述来自对话、而你手改了一个
+ * 标签，`sources` 可能把两者都记成 `chat:<日期>`。要逐字段精确，得在契约里加
+ * 逐字段出处，现在不值得。
+ *
+ * `csvRows` 是可选的：传进来就复用，不传就自己读一次 `clips.csv`。
+ */
+export async function collectFromYou({ clipPath, assetsRoot, chat, csvRows }) {
+  const derived = [
+    readChat(chat),
+    await readSidecar(clipPath),
+    await readCsv(clipPath, assetsRoot, csvRows),
+    readFilename(clipPath),
+    readFolder(clipPath, assetsRoot),
+  ].filter(Boolean);
+
+  const previous = (await readClipFile(clipPath))?.fromYou;
+  const candidates = [...derived];
+
+  // 手改检测。推导不出来的值，只能是你自己写进文件的。
+  if (previous) {
+    const derivedDescriptions = new Set(nonEmpty(derived.map((d) => d.description)));
+    const derivedNotes = new Set(nonEmpty(derived.map((d) => d.notes)));
+    const derivedTags = new Set(derived.flatMap((d) => d.tags));
+    const priorChat = (previous.sources ?? []).find((s) => s.startsWith('chat:'));
+
+    const stickyDescription = clean(previous.description);
+    const stickyNotes = clean(previous.notes);
+    const stickyTags = nonEmpty(previous.tags ?? []).filter((t) => !derivedTags.has(t));
+
+    if (
+      (stickyDescription !== '' && !derivedDescriptions.has(stickyDescription)) ||
+      (stickyNotes !== '' && !derivedNotes.has(stickyNotes)) ||
+      stickyTags.length > 0
+    ) {
+      // 原来是对话给的就保住 chat 的出处，否则算手改。两者优先级都在推导之上。
+      const fromChat = priorChat !== undefined && !chat;
+      candidates.push({
+        kind: fromChat ? 'chat' : 'manual',
+        source: fromChat ? priorChat : 'manual',
+        description: derivedDescriptions.has(stickyDescription) ? '' : stickyDescription,
+        notes: derivedNotes.has(stickyNotes) ? '' : stickyNotes,
+        tags: stickyTags,
+      });
+    }
+  }
+
+  const byPriority = [...candidates].sort((a, b) => PRIORITY[a.kind] - PRIORITY[b.kind]);
+  const pick = (field) => clean(byPriority.find((c) => clean(c[field]) !== '')?.[field]);
+
+  // 标签按优先级顺序合并去重，所以顺序也是确定的。
+  const tags = [];
+  for (const c of byPriority) for (const t of c.tags) if (!tags.includes(t)) tags.push(t);
+
+  return {
+    description: pick('description'),
+    tags,
+    notes: pick('notes'),
+    segments: previous?.segments ?? [],
+    sources: [...new Set(candidates.map((c) => c.source))].sort(),
+  };
+}
