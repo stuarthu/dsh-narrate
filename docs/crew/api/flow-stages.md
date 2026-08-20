@@ -2,7 +2,8 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 版本 | 5 |
+| 版本 | 6 |
+| 版本 6 改了什么 | `voice.clips` 每条多一个 `text`：配这一句的时候文稿上写的是什么。有了它才能看出句子改没改——改了就重配那一句，没改就复用，配音要花钱不能白花。补上 `E_SPEAK_INTERNAL`、`E_NOTHING_TO_PLAY`、`E_CONCAT_FAILED`。**加法改动** |
 | 版本 5 改了什么 | `meta` 多一个 `approvedStops`：用户在哪几个停点点过头。**停点 1 不在里面**——它的点头就是回答问题本身，没有额外的确认动作；停点 2、3、4 各要一次明确的"继续"。补上 `E_OUT_OF_ORDER`、`E_STOP_NOT_REACHED`、`E_NO_SUCH_STOP`、`E_NO_SUCH_STEP` 四个错误名。**加法改动** |
 | 版本 4 改了什么 | 补上写文稿那一步的五个错误名：`E_EMPTY_ANSWER`、`E_NO_SUCH_QUESTION`、`E_INTERVIEW_INCOMPLETE`、`E_COMPOSE_FAILED`、`E_SCRIPT_UNUSABLE`。**加法改动** |
 | 版本 3 改了什么 | 加两个错误名：`E_JOB_MISSING`（工作文件本身不在）和 `E_RENDER_OUTPUT_UNREADABLE`（成片读不出）。原来这两种情况借用了 `E_SECTION_MISSING` 和 `E_AUDIO_MISSING`，名字说的是错事。**这是加法改动**，另一侧不用重跑 |
@@ -48,7 +49,7 @@ JSON，UTF-8，缩进 2 空格。所有时间单位是**秒**，浮点数，保�
   },
   "voice": {
     "engine": "edge",
-    "clips": [ { "sentenceId": "S-001", "audioPath": "/…/audio/S-001.wav", "durationSec": 2.480 } ]
+    "clips": [ { "sentenceId": "S-001", "text": "Rust 快，不是因为它新。", "audioPath": "/…/audio/S-001.wav", "durationSec": 2.480 } ]
   },
   "render": {
     "segments": [ { "sentenceId": "S-001", "path": "/…/seg/S-001.mp4", "durationSec": 2.480 } ],
@@ -125,6 +126,9 @@ JSON，UTF-8，缩进 2 空格。所有时间单位是**秒**，浮点数，保�
 | `E_STOP_NOT_REACHED` | 想给一个还没走到的停点点头。那等于把停点绕掉了 |
 | `E_NO_SUCH_STOP` | 停点编号不是 1 到 4 |
 | `E_NO_SUCH_STEP` | 步骤名不认识 |
+| `E_SPEAK_INTERNAL` | 配某一句时出了没有错误码的意外错误。**必须用这个码**，不能贴成引擎失败，否则程序 bug 会被当成"这句配不出来" |
+| `E_NOTHING_TO_PLAY` | 一句配音都还没有，拼不出停点 4 要的纯音频 |
+| `E_CONCAT_FAILED` | 拼接失败 |
 | `E_RENDER_OUTPUT_UNREADABLE` | 渲染跑完了，但输出文件读不出时长 |
 
 ## 好不好用
