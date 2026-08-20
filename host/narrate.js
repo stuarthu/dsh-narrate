@@ -24,11 +24,17 @@
 import { mkdir } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 
-import { createJob, readJob } from '../src/flow/job.js';
-import { buildQuestions, recordAnswer, interviewComplete } from '../src/script/interview.js';
+import { createJob, openJob, readJob } from '../src/flow/job.js';
+import { buildQuestions, recordAnswer } from '../src/script/interview.js';
 import { writeScript } from '../src/script/write.js';
 import { measureClip, normalizeMachine, scanAssets } from '../src/assets-index/scan.js';
 import { fingerprintOf, writeMachineSection } from '../src/assets-index/clip-file.js';
+import { nextStep, approveStop, STOP_POINTS } from '../src/flow/run.js';
+import { pickCandidates, termWeights } from '../src/shotplan/candidates.js';
+import { assignShots } from '../src/shotplan/assign.js';
+import { speakScript, buildAudioOnly } from '../src/voice/speak.js';
+import { defaultEngineConfig } from '../src/voice/engines/default.js';
+import { renderVideo } from '../src/render/concat.js';
 
 /** cordis 服务注入：apply 里要用 ctx.tools，必须显式声明。 */
 export const inject = ['tools'];
@@ -39,6 +45,10 @@ export const TOOL_NAMES = Object.freeze([
   'narrate_script',
   'narrate_index',
   'narrate_describe',
+  'narrate_shotplan',
+  'narrate_voice',
+  'narrate_render',
+  'narrate_approve',
   'narrate_status',
 ]);
 
@@ -59,6 +69,19 @@ const obj = (properties, required, description) => ({
 const QUESTION = obj({ id: str('问题编号，形如 IQ-1'), text: str('问题本身'), suggestion: str('推荐答案') },
   ['id', 'text', 'suggestion']);
 const SENTENCE = obj({ id: str('句子编号，形如 S-001'), text: str('这一句的文字') }, ['id', 'text']);
+const SHOT = obj({
+  sentenceId: str('句子编号'),
+  assetPath: str('用哪一段素材'),
+  startSec: num('从素材第几秒开始'),
+  endSec: num('到第几秒'),
+  subtitle: str('这一句的字幕'),
+  confidence: str('high 或 low'),
+}, ['sentenceId', 'assetPath', 'startSec', 'endSec']);
+const MISSING = obj({
+  sentenceId: str('句子编号'),
+  kind: str('too-short 表示相关的素材都太短，not-relevant 表示没有相关的'),
+  reason: str('说给用户听的原因'),
+}, ['sentenceId', 'reason']);
 const SEGMENT = obj({
   startSec: num('这一段从第几秒开始'),
   endSec: num('到第几秒结束'),
@@ -117,6 +140,12 @@ async function freeJobDir(workdir, slug) {
 function buildTools(config) {
   const workdirSetting = typeof config?.workdir === 'string' ? config.workdir : DEFAULT_WORKDIR;
   const workdir = isAbsolute(workdirSetting) ? workdirSetting : resolve(process.cwd(), workdirSetting);
+  // 没配就用自带的引擎。配置缺失不能让挂载起不来——报错要留到真的用它的时候。
+  const voiceConfig = asRecord(config).voice ?? defaultEngineConfig();
+  // 目标分辨率通常由横竖屏决定，配置里能盖掉（测试和低配机器用得上）。
+  const target = asRecord(config).target;
+  const targetSize = Number.isFinite(target?.width) && Number.isFinite(target?.height)
+    ? { width: target.width, height: target.height } : undefined;
 
   return [
     {
@@ -357,50 +386,270 @@ function buildTools(config) {
           stage: str('现在在哪个阶段'),
           stopPoint: int('停在第几个停点，0 表示不在停点上'),
           waitingForUser: bool('在等用户点头吗'),
-          nextStep: str('下一步'),
+          nextStep: str('下一步该做什么'),
+          tool: str('下一步该调哪个工具'),
           counts: obj({
             questions: int('一共几个问题'),
             answered: int('答了几个'),
             sentences: int('文稿几句'),
-          }, ['questions', 'answered', 'sentences']),
-        }, ['stage', 'stopPoint', 'waitingForUser', 'nextStep', 'counts']),
+            shots: int('几句配上了画面'),
+            missing: int('几句缺画面'),
+            voiceClips: int('几句配了音'),
+          }, ['questions', 'answered', 'sentences', 'shots', 'missing', 'voiceClips']),
+        }, ['stage', 'stopPoint', 'waitingForUser', 'nextStep', 'tool', 'counts']),
         render: textRenderer((_args, value) => {
           const v = asRecord(value);
-          return [`阶段 ${v.stage ?? ''}，停点 ${v.stopPoint ?? 0}。下一步：${v.nextStep ?? ''}`];
+          return [
+            `阶段 ${v.stage ?? ''}，停点 ${v.stopPoint ?? 0}`
+            + (v.waitingForUser ? '（在等用户点头）' : '') + '。',
+            `下一步：${v.nextStep ?? ''}`,
+            `调这个工具：${v.tool ?? ''}`,
+          ];
         }),
       },
       async execute(args) {
         const jobDir = requireString(args, 'jobDir');
         try {
           const job = await readJob(jobDir);
+          // **一个真相来源。** 次序和停点都由 src/flow/run.js 说，这里不重写一套。
+          // 原来这里自己手写了一套阶段判断，只认到停点 2，和 run.js 各说各话。
+          const where = nextStep(job);
           const questions = job.interview?.questions ?? [];
           const answered = questions.filter((q) => String(q.answer ?? '').trim() !== '').length;
-          const sentences = job.script?.sentences ?? [];
-          const done = await interviewComplete(jobDir);
-
-          let stage = 'script';
-          let stopPoint = 1;
-          let waitingForUser = true;
-          let nextStep = '先调 narrate_start 建任务。';
-          if (questions.length === 0) {
-            nextStep = '还没提问。调 narrate_start，或者直接问用户那四件事。';
-          } else if (!done) {
-            nextStep = `还差 ${questions.length - answered} 个回答，继续调 narrate_answer。`;
-          } else if (sentences.length === 0) {
-            stopPoint = 1;
-            waitingForUser = false;
-            nextStep = '问完了。自己写文稿，再调 narrate_script 交上来。';
-          } else {
-            stopPoint = 2;
-            nextStep = '停点 2：文稿写好了，念给用户等他点头。他点头之后的步骤还没做完。';
-          }
           return {
-            stage,
-            stopPoint,
-            waitingForUser,
-            nextStep,
-            counts: { questions: questions.length, answered, sentences: sentences.length },
+            stage: where.step,
+            stopPoint: where.stopPoint,
+            waitingForUser: where.waitingForUser,
+            nextStep: where.why,
+            tool: where.tool,
+            counts: {
+              questions: questions.length,
+              answered,
+              sentences: (job.script?.sentences ?? []).length,
+              shots: (job.shotplan?.shots ?? []).length,
+              missing: (job.shotplan?.missing ?? []).length,
+              voiceClips: (job.voice?.clips ?? []).length,
+            },
           };
+        } catch (error) {
+          throw surface(error);
+        }
+      },
+    },
+
+    {
+      name: 'narrate_shotplan',
+      description:
+        '为文稿的每一句挑一段素材，做出画面对应表。挑不到的会列在 missing 里——' +
+        '把那几句原话告诉用户，让他决定改文稿还是补素材，不要自己找个凑数的画面填上。' +
+        '\n\n`queries` 是每句一个英文查询，用来跨语言匹配：中文文稿对英文素材元数据，' +
+        '字符上根本没有交集，所以这个查询在实践中几乎是必需的。' +
+        '**写画面里的主体，不要写拍摄手法。**`time lapse`、`slow motion`、`drone shot` ' +
+        '会匹配上任何同手法拍的素材，把主体词压下去——实测 `bright sky with moving clouds, ' +
+        'time lapse` 配上了一段工业烟雾的延时，改成 `clouds bright sky` 就对了。',
+      parameters: obj({
+        jobDir: str('工作目录（必填）'),
+        assetsRoot: str('素材文件夹（必填）'),
+        queries: arr(obj({
+          sentenceId: str('句子编号'),
+          englishQuery: str('这一句画面的英文关键词，写主体不写手法'),
+        }, ['sentenceId', 'englishQuery']), '每句一个英文查询，用来跨语言匹配'),
+      }, ['jobDir', 'assetsRoot']),
+      output: {
+        schema: obj({
+          shots: arr(SHOT, '每句配到的画面'),
+          missing: arr(MISSING, '没配上画面的句子'),
+          notes: arr(str('提醒'), '要告诉用户的提醒'),
+          nextStep: str('下一步'),
+        }, ['shots', 'missing', 'notes', 'nextStep']),
+        render: textRenderer((_args, value) => {
+          const v = asRecord(value);
+          const lines = [`${v.shots?.length ?? 0} 句配上了画面，${v.missing?.length ?? 0} 句没配上。`];
+          for (const m of v.missing ?? []) lines.push(`缺画面 ${m.sentenceId}：${m.reason}`);
+          for (const n of v.notes ?? []) lines.push(`提醒：${n}`);
+          lines.push(v.nextStep ?? '');
+          return lines;
+        }),
+      },
+      async execute(args) {
+        const jobDir = requireString(args, 'jobDir');
+        const assetsRoot = requireString(args, 'assetsRoot');
+        const queries = new Map((asRecord(args).queries ?? [])
+          .filter((q) => typeof q?.sentenceId === 'string')
+          .map((q) => [q.sentenceId, String(q.englishQuery ?? '')]));
+        try {
+          const job = await readJob(jobDir);
+          const sentences = (job.script?.sentences ?? []).map((s) => ({
+            ...s,
+            englishQuery: queries.get(s.id) ?? '',
+          }));
+          if (sentences.length === 0) {
+            throw new Error('E_OUT_OF_ORDER: 还没有文稿，先调 narrate_script');
+          }
+          // 只报不做：这里不理解素材，只用已经理解过的。
+          const scanned = await scanAssets({ assetsRoot });
+          const weights = termWeights(scanned.clips);
+          const candidates = [];
+          for (const sentence of sentences) {
+            candidates.push({
+              sentenceId: sentence.id,
+              ...(await pickCandidates({ sentence, clips: scanned.clips, weights })),
+            });
+          }
+          const plan = assignShots({ sentences, candidates });
+          const handle = await openJob(jobDir, 'shotplan');
+          handle.set('shotplan', { shots: plan.shots, missing: plan.missing, notes: plan.notes });
+          await handle.save();
+          return {
+            shots: plan.shots,
+            missing: plan.missing,
+            notes: (plan.notes ?? []).map((n) => (typeof n === 'string' ? n : n.message ?? String(n))),
+            nextStep: '停点 3：把画面对应表和缺画面的句子给用户看，等他点头（narrate_approve stop 3）。'
+              + (scanned.needsUnderstanding.length > 0
+                ? ` 另外还有 ${scanned.needsUnderstanding.length} 段素材没理解过，理解了可能配得更好。`
+                : ''),
+          };
+        } catch (error) {
+          throw surface(error);
+        }
+      },
+    },
+
+    {
+      name: 'narrate_voice',
+      description:
+        '给文稿每一句配音，再拼成一条只有声音的文件给用户听。' +
+        '**先只听声音，别看画面**——语速错了整条片子都要重做，而画面会分散注意力。' +
+        '文字没改过的句子会直接复用上次的录音，不重配。',
+      parameters: obj({
+        jobDir: str('工作目录（必填）'),
+        voice: str('引擎的音色名，可不填'),
+      }, ['jobDir']),
+      output: {
+        schema: obj({
+          spoken: arr(str('句子编号'), '这次新配的'),
+          reused: arr(str('句子编号'), '文字没改、直接复用的'),
+          skipped: arr(obj({ sentenceId: str('句子编号'), code: str('错误码'), message: str('说明') },
+            ['sentenceId', 'code', 'message']), '配不出来的句子'),
+          audioOnly: str('停点 4 要听的那条纯音频'),
+          durationSec: num('纯音频多长'),
+          nextStep: str('下一步'),
+        }, ['spoken', 'reused', 'skipped', 'audioOnly', 'durationSec', 'nextStep']),
+        render: textRenderer((_args, value) => {
+          const v = asRecord(value);
+          const lines = [
+            `新配 ${v.spoken?.length ?? 0} 句，复用 ${v.reused?.length ?? 0} 句，`
+            + `配不出 ${v.skipped?.length ?? 0} 句。全长 ${v.durationSec ?? 0} 秒。`,
+          ];
+          for (const s of v.skipped ?? []) lines.push(`配不出 ${s.sentenceId}：[${s.code}] ${s.message}`);
+          lines.push(`纯音频：${v.audioOnly ?? ''}`);
+          lines.push(v.nextStep ?? '');
+          return lines;
+        }),
+      },
+      async execute(args) {
+        const jobDir = requireString(args, 'jobDir');
+        const voice = typeof asRecord(args).voice === 'string' ? asRecord(args).voice : undefined;
+        try {
+          const said = await speakScript({ jobDir, config: voiceConfig, voice });
+          const preview = await buildAudioOnly({ jobDir, outPath: join(jobDir, 'preview.wav') });
+          return {
+            spoken: said.spoken,
+            reused: said.reused,
+            skipped: said.skipped,
+            audioOnly: preview.path,
+            durationSec: preview.durationSec,
+            nextStep: '停点 4：让用户听这条纯音频，只听语速和断句。点头之后（narrate_approve stop 4）'
+              + '才能渲染。',
+          };
+        } catch (error) {
+          throw surface(error);
+        }
+      },
+    },
+
+    {
+      name: 'narrate_render',
+      description:
+        '裁画面、混旁白、烧字幕，拼成一条成片。停点 4 没点头会被拒绝——这不是建议，是硬检查。' +
+        '缺画面或缺配音的句子会被跳过并报出来，不会悄悄消失。',
+      parameters: obj({
+        jobDir: str('工作目录（必填）'),
+        outPath: str('成片放哪，可不填'),
+      }, ['jobDir']),
+      output: {
+        schema: obj({
+          output: str('成片路径'),
+          durationSec: num('多长'),
+          width: int('宽'),
+          height: int('高'),
+          skippedSentences: arr(str('句子编号'), '缺画面或缺配音、没进成片的句子'),
+          failures: arr(obj({ sentenceId: str('句子编号'), code: str('错误码'), message: str('说明') },
+            ['sentenceId', 'code', 'message']), '渲染出错的句子'),
+          nextStep: str('下一步'),
+        }, ['output', 'durationSec', 'width', 'height', 'skippedSentences', 'failures', 'nextStep']),
+        render: textRenderer((_args, value) => {
+          const v = asRecord(value);
+          const lines = [`成片：${v.output ?? ''}（${v.durationSec ?? 0} 秒，${v.width}x${v.height}）`];
+          for (const id of v.skippedSentences ?? []) lines.push(`没进成片：${id}（缺画面或缺配音）`);
+          for (const f of v.failures ?? []) lines.push(`渲染出错 ${f.sentenceId}：[${f.code}] ${f.message}`);
+          lines.push(v.nextStep ?? '');
+          return lines;
+        }),
+      },
+      async execute(args) {
+        const jobDir = requireString(args, 'jobDir');
+        const outPath = typeof asRecord(args).outPath === 'string' && asRecord(args).outPath.trim() !== ''
+          ? asRecord(args).outPath.trim() : undefined;
+        try {
+          const got = await renderVideo({ jobDir, outPath, target: targetSize });
+          return {
+            output: got.output,
+            durationSec: got.durationSec,
+            width: got.width,
+            height: got.height,
+            skippedSentences: got.skippedSentences,
+            failures: got.failures,
+            nextStep: got.skippedSentences.length + got.failures.length > 0
+              ? '做完了，但有句子没进成片。把它们告诉用户，让他决定要不要补素材重做。'
+              : '做完了。把成片路径给用户。',
+          };
+        } catch (error) {
+          throw surface(error);
+        }
+      },
+    },
+
+    {
+      name: 'narrate_approve',
+      description:
+        '记下用户在某个停点点了头。**只有用户自己说了"继续"才调这个，绝不能替他点头**——' +
+        '停下来问他是这个插件存在的唯一理由。还没走到的停点点不了。' +
+        '停点 1 不用调：它的点头就是用户回答那几个问题本身。',
+      parameters: obj({
+        jobDir: str('工作目录（必填）'),
+        stop: int('停点编号：2 文稿、3 画面对应表、4 纯音频'),
+      }, ['jobDir', 'stop']),
+      output: {
+        schema: obj({
+          approved: arr(int('停点编号'), '到现在为止点过头的停点'),
+          nextStep: str('下一步'),
+        }, ['approved', 'nextStep']),
+        render: textRenderer((_args, value) => {
+          const v = asRecord(value);
+          return [`已点头的停点：${(v.approved ?? []).join('、')}`, v.nextStep ?? ''];
+        }),
+      },
+      async execute(args) {
+        const jobDir = requireString(args, 'jobDir');
+        const stop = Number(asRecord(args).stop);
+        if (!Object.values(STOP_POINTS).includes(stop)) {
+          throw new Error(`E_NO_SUCH_STOP: 停点只有 ${Object.values(STOP_POINTS).join('、')}，收到 ${args?.stop}`);
+        }
+        try {
+          const approved = await approveStop(jobDir, stop);
+          const where = nextStep(await readJob(jobDir));
+          return { approved, nextStep: `${where.why} 调 ${where.tool}。` };
         } catch (error) {
           throw surface(error);
         }

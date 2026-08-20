@@ -108,8 +108,10 @@ export function termWeights(clips) {
   }
   const weights = new Map();
   for (const [term, count] of seenIn) {
-    // 每段都有 → 接近 0。只有一两段有 → 明显大于 0。
-    weights.set(term, Math.log((total + 1) / (count + 1)));
+    // 每段都有 → 接近 0，但**绝不等于 0**。分母用 count + 0.5 而不是 count + 1：
+    // 后者在"所有素材都有这个词"时正好等于 0，于是只有一段素材的文件夹里每个词都是
+    // 0 分，每一句都算没配上，插件看起来完全不工作。用户先放一两段试试是很常见的。
+    weights.set(term, Math.log((total + 1) / (count + 0.5)));
   }
   return weights;
 }

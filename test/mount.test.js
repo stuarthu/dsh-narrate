@@ -230,19 +230,26 @@ describe('T-11 停点 1 和 2 真的接上了', () => {
   });
 
   test('narrate_status 在每个阶段都说得出下一步', async () => {
+    // 语义跟着 src/flow/run.js 走：**没做完的步骤不算"停在停点上"**，
+    // stopPoint 只在内容做完、等用户点头时才是非 0。工具名在 tool 字段里，
+    // 不在给用户念的那句话里。挂载原来自己手写了一套，和 run.js 各说各话。
     const ctx = mount({ workdir: await tmp() });
     const { jobDir, questions } = await call(ctx, 'narrate_start', { idea: 'x' });
-    const atOne = await call(ctx, 'narrate_status', { jobDir });
-    assert.equal(atOne.stopPoint, 1);
-    assert.ok(atOne.nextStep.includes('narrate_answer'));
+    const atStart = await call(ctx, 'narrate_status', { jobDir });
+    assert.equal(atStart.stage, 'interview');
+    assert.equal(atStart.stopPoint, 0, '问题还没答完，不算停在停点上');
+    assert.equal(atStart.tool, 'narrate_answer');
 
     for (const q of questions) await call(ctx, 'narrate_answer', { jobDir, questionId: q.id, answer: 'x' });
-    assert.ok((await call(ctx, 'narrate_status', { jobDir })).nextStep.includes('narrate_script'));
+    const atScript = await call(ctx, 'narrate_status', { jobDir });
+    assert.equal(atScript.stage, 'script');
+    assert.equal(atScript.tool, 'narrate_script');
 
     await call(ctx, 'narrate_script', { jobDir, sentences: ['一句话'] });
     const atTwo = await call(ctx, 'narrate_status', { jobDir });
     assert.equal(atTwo.stopPoint, 2);
     assert.ok(atTwo.waitingForUser, '停点 2 要等用户点头');
+    assert.equal(atTwo.tool, 'narrate_approve');
   });
 });
 
@@ -391,5 +398,243 @@ describe('T-11 用 dsh 自己的校验器验一遍（导不到就出声跳过）
       const bad = Array.isArray(violations) ? violations : [];
       assert.deepEqual(bad, [], `${name} 的返回值过不了自己声明的 schema：${bad.join('；')}`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-12：剩下四个工具，以及 narrate_status 只有一个真相来源
+// ---------------------------------------------------------------------------
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const run2 = promisify(execFile);
+const FFMPEG2 = process.env.DSH_FFMPEG_PATH || 'ffmpeg';
+
+/** 一段纯色素材，附一个描述文件，好让挑素材那一层有东西可用。 */
+async function asset(dir, name, { seconds = 8, description = '蓝天白云', tags = '天空, 云' } = {}) {
+  const clip = join(dir, `${name}.mp4`);
+  await run2(FFMPEG2, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi',
+    '-i', `color=c=black:s=640x360:r=25:d=${seconds}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clip]);
+  await writeFile(`${clip}.narrate.txt`, `${description}\n标签: ${tags}\n`, 'utf8');
+  return clip;
+}
+
+/** 一个假语音引擎：每句给一段两秒的音频。 */
+async function fakeVoice(dir) {
+  const src = join(dir, 'tone.wav');
+  await run2(FFMPEG2, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi',
+    '-i', 'sine=f=440:d=2', '-c:a', 'pcm_s16le', src]);
+  const script = join(dir, 'engine.mjs');
+  await writeFile(script, 'import { copyFileSync } from \'node:fs\';\n'
+    + `copyFileSync(${JSON.stringify(src)}, process.argv[3]);\n`, 'utf8');
+  return { command: [process.execPath, script, '%TEXT_FILE%', '%OUT_FILE%'] };
+}
+
+/** 走到"文稿交完、停点 2 点过头"。 */
+async function upToScript(ctx, { idea = '云的延时摄影', aspect = 'landscape', sentences }) {
+  const started = await call(ctx, 'narrate_start', { idea, aspect });
+  for (const q of started.questions) {
+    await call(ctx, 'narrate_answer', { jobDir: started.jobDir, questionId: q.id, answer: '普通观众' });
+  }
+  await call(ctx, 'narrate_script', { jobDir: started.jobDir, sentences });
+  await call(ctx, 'narrate_approve', { jobDir: started.jobDir, stop: 2 });
+  return started.jobDir;
+}
+
+describe('T-12 剩下四个工具', () => {
+  test('十个工具都注册了，`run.js` 点过名的一个都不少', () => {
+    const ctx = mount();
+    const names = [...ctx.registered.keys()];
+    for (const name of ['narrate_shotplan', 'narrate_voice', 'narrate_render', 'narrate_approve']) {
+      assert.ok(names.includes(name), `少了 ${name}`);
+    }
+    assert.deepEqual(names.sort(), [...TOOL_NAMES].sort());
+  });
+
+  test('每个新工具的 schema 也只用 dsh 允许的关键字', () => {
+    const ctx = mount();
+    for (const name of ['narrate_shotplan', 'narrate_voice', 'narrate_render', 'narrate_approve']) {
+      const tool = ctx.registered.get(name);
+      assert.deepEqual(schemaViolations(tool.output.schema), [], `${name} 的 schema 违规`);
+      assert.equal(typeof tool.output.render, 'function', `${name} 少了 render`);
+    }
+  });
+
+  test('挑素材那个工具的说明里写着"写主体，别写拍摄手法"', () => {
+    const ctx = mount();
+    const text = ctx.registered.get('narrate_shotplan').description;
+    // agent 只看得到 description。这条规则不写在这里就等于没写（弱点第 3 条）。
+    assert.match(text, /主体/);
+    assert.match(text, /手法|技法/);
+  });
+
+  test('narrate_approve 提前点头会被拒，理由说得清', async () => {
+    const dir = await tmp();
+    const ctx = mount({ workdir: join(dir, 'jobs') });
+    const started = await call(ctx, 'narrate_start', { idea: '随便' });
+    await assert.rejects(
+      () => call(ctx, 'narrate_approve', { jobDir: started.jobDir, stop: 3 }),
+      (e) => /E_STOP_NOT_REACHED/.test(e.message));
+  });
+
+  test('narrate_shotplan 出画面对应表，缺素材的句子要报出来', async () => {
+    const dir = await tmp();
+    const assets = join(dir, 'assets');
+    await mkdir(assets, { recursive: true });
+    await asset(assets, 'sky', { description: '蓝天白云', tags: '天空, 云' });
+    const ctx = mount({ workdir: join(dir, 'jobs') });
+    const jobDir = await upToScript(ctx, { sentences: ['云在天上飘。', '地铁里人很多。'] });
+
+    // 素材还没被"理解"过，所以先交一段理解结果——这是 agent 的活
+    await call(ctx, 'narrate_index', { assetsRoot: assets });
+    await call(ctx, 'narrate_describe', {
+      clipPath: join(assets, 'sky.mp4'),
+      segments: [{ startSec: 0, endSec: 8, description: '蓝天上白云慢慢飘', tags: ['天空', '云'], confidence: 'high' }],
+    });
+
+    const got = await call(ctx, 'narrate_shotplan', {
+      jobDir,
+      assetsRoot: assets,
+      queries: [{ sentenceId: 'S-001', englishQuery: 'clouds bright sky' }],
+    });
+    assert.equal(got.shots.length, 1, `该配上一句，实际 ${JSON.stringify(got.shots)}`);
+    assert.equal(got.shots[0].sentenceId, 'S-001');
+    assert.equal(got.missing.length, 1, '第二句没有素材，该报出来');
+    assert.equal(got.missing[0].sentenceId, 'S-002');
+    assert.match(got.nextStep, /停点 3/);
+    // 存进了工作文件，字段名照契约
+    const job = await readJob(jobDir);
+    assert.ok(job.shotplan.shots[0].assetPath, '工作文件里该是 assetPath');
+  });
+
+  test('narrate_voice 配完音，还给出停点 4 要听的纯音频', async () => {
+    const dir = await tmp();
+    const assets = join(dir, 'assets');
+    await mkdir(assets, { recursive: true });
+    const clip = await asset(assets, 'sky');
+    const ctx = mount({ workdir: join(dir, 'jobs'), voice: await fakeVoice(dir) });
+    const jobDir = await upToScript(ctx, { sentences: ['云在天上飘。'] });
+    await call(ctx, 'narrate_index', { assetsRoot: assets });
+    await call(ctx, 'narrate_describe', { clipPath: clip,
+      segments: [{ startSec: 0, endSec: 8, description: '蓝天上白云慢慢飘', tags: ['天空', '云'], confidence: 'high' }] });
+    await call(ctx, 'narrate_shotplan', { jobDir, assetsRoot: assets });
+    await call(ctx, 'narrate_approve', { jobDir, stop: 3 });
+
+    const got = await call(ctx, 'narrate_voice', { jobDir });
+    assert.equal(got.spoken.length, 1);
+    assert.ok(got.audioOnly.endsWith('.wav'), `该给一条纯音频，实际 ${got.audioOnly}`);
+    await access(got.audioOnly);
+    assert.match(got.nextStep, /停点 4/);
+  });
+
+  test('narrate_render 在停点 4 没点头时拒绝，点头之后出片', async () => {
+    const dir = await tmp();
+    const assets = join(dir, 'assets');
+    await mkdir(assets, { recursive: true });
+    const clip = await asset(assets, 'sky');
+    const ctx = mount({ workdir: join(dir, 'jobs'), voice: await fakeVoice(dir),
+      target: { width: 320, height: 180 } });
+    const jobDir = await upToScript(ctx, { sentences: ['云在天上飘。'] });
+    await call(ctx, 'narrate_index', { assetsRoot: assets });
+    await call(ctx, 'narrate_describe', { clipPath: clip,
+      segments: [{ startSec: 0, endSec: 8, description: '蓝天上白云慢慢飘', tags: ['天空', '云'], confidence: 'high' }] });
+    await call(ctx, 'narrate_shotplan', { jobDir, assetsRoot: assets });
+    await call(ctx, 'narrate_approve', { jobDir, stop: 3 });
+    await call(ctx, 'narrate_voice', { jobDir });
+
+    await assert.rejects(
+      () => call(ctx, 'narrate_render', { jobDir }),
+      (e) => /E_OUT_OF_ORDER/.test(e.message) && /停点 4/.test(e.message));
+
+    await call(ctx, 'narrate_approve', { jobDir, stop: 4 });
+    const got = await call(ctx, 'narrate_render', { jobDir });
+    await access(got.output);
+    assert.ok(got.durationSec > 0.5, `成片该有长度，实际 ${got.durationSec}`);
+  });
+});
+
+describe('T-12 narrate_status 只有一个真相来源', () => {
+  test('阶段判断来自 run.js 的 nextStep，认得到停点 3 和 4', async () => {
+    const dir = await tmp();
+    const assets = join(dir, 'assets');
+    await mkdir(assets, { recursive: true });
+    const clip = await asset(assets, 'sky');
+    const ctx = mount({ workdir: join(dir, 'jobs'), voice: await fakeVoice(dir) });
+    const jobDir = await upToScript(ctx, { sentences: ['云在天上飘。'] });
+    await call(ctx, 'narrate_index', { assetsRoot: assets });
+    await call(ctx, 'narrate_describe', { clipPath: clip,
+      segments: [{ startSec: 0, endSec: 8, description: '蓝天上白云慢慢飘', tags: ['天空', '云'], confidence: 'high' }] });
+    await call(ctx, 'narrate_shotplan', { jobDir, assetsRoot: assets });
+
+    // 画面对应表做好了，还没点头 → 该停在停点 3。
+    // 挂载原来自己手写的那套阶段判断到停点 2 就走不动了。
+    const atThree = await call(ctx, 'narrate_status', { jobDir });
+    assert.equal(atThree.stopPoint, 3, `该停在停点 3，实际 ${atThree.stopPoint}`);
+    assert.equal(atThree.waitingForUser, true);
+    assert.equal(atThree.tool, 'narrate_approve');
+
+    await call(ctx, 'narrate_approve', { jobDir, stop: 3 });
+    const atVoice = await call(ctx, 'narrate_status', { jobDir });
+    assert.equal(atVoice.stage, 'voice');
+    assert.equal(atVoice.tool, 'narrate_voice');
+
+    await call(ctx, 'narrate_voice', { jobDir });
+    const atFour = await call(ctx, 'narrate_status', { jobDir });
+    assert.equal(atFour.stopPoint, 4, `该停在停点 4，实际 ${atFour.stopPoint}`);
+  });
+
+  test('刚开头的任务：还在问答，不在任何停点上', async () => {
+    const dir = await tmp();
+    const ctx = mount({ workdir: join(dir, 'jobs') });
+    const started = await call(ctx, 'narrate_start', { idea: '随便' });
+    const got = await call(ctx, 'narrate_status', { jobDir: started.jobDir });
+    assert.equal(got.stage, 'interview');
+    assert.equal(got.waitingForUser, false);
+    assert.equal(got.tool, 'narrate_answer');
+  });
+});
+
+describe('T-12 四个新工具的真实返回值都渲染出看得见的文字', () => {
+  test('走完整条流程，每一步的 render 都给出有内容的文字', async () => {
+    // 用空对象测 render 是骗得过去的：真正出过的 bug 是"agent 看到 (no output)"。
+    // 所以这里拿**真实的 execute 返回值**去渲染，并且要求文字里有关键信息。
+    const dir = await tmp();
+    const assets = join(dir, 'assets');
+    await mkdir(assets, { recursive: true });
+    const clip = await asset(assets, 'sky');
+    const ctx = mount({ workdir: join(dir, 'jobs'), voice: await fakeVoice(dir),
+      target: { width: 320, height: 180 } });
+    const jobDir = await upToScript(ctx, { sentences: ['云在天上飘。'] });
+    await call(ctx, 'narrate_index', { assetsRoot: assets });
+    await call(ctx, 'narrate_describe', { clipPath: clip,
+      segments: [{ startSec: 0, endSec: 8, description: '蓝天上白云慢慢飘', tags: ['天空', '云'], confidence: 'high' }] });
+
+    const seen = (name, args) => (async () => {
+      const tool = ctx.registered.get(name);
+      const value = await tool.execute(args);
+      const blocks = tool.output.render(args, value);
+      const text = blocks.map((b) => b.text).join('\n');
+      assert.ok(text.trim().length > 15, `${name} 渲染出来只有「${text}」，太少`);
+      return { value, text };
+    })();
+
+    const plan = await seen('narrate_shotplan', { jobDir, assetsRoot: assets });
+    assert.match(plan.text, /配上了画面/);
+    assert.match(plan.text, /停点 3/);
+
+    const ok3 = await seen('narrate_approve', { jobDir, stop: 3 });
+    assert.match(ok3.text, /已点头的停点/);
+
+    const voice = await seen('narrate_voice', { jobDir });
+    assert.ok(voice.text.includes(voice.value.audioOnly), '渲染的文字里该看得到纯音频的路径');
+    assert.match(voice.text, /停点 4/);
+
+    await call(ctx, 'narrate_approve', { jobDir, stop: 4 });
+    const made = await seen('narrate_render', { jobDir });
+    assert.ok(made.text.includes(made.value.output), '渲染的文字里该看得到成片路径');
+    assert.match(made.text, /320x180/);
+
+    const status = await seen('narrate_status', { jobDir });
+    assert.match(status.text, /阶段 done|做完了/);
   });
 });

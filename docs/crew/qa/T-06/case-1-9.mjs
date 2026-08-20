@@ -44,14 +44,22 @@ await check('只有窗口够长的那段是候选，短的进 dropped 并说明�
 });
 
 console.log('用例 2：标签按稀有度加权');
-await check('每段都有的标签权重接近 0，独有的明显大于 0', () => {
+await check('每段都有的标签几乎不加分，独有的明显更重', () => {
   const weights = termWeights([
     clip('/a.mp4', { tags: ['Fair Use', '机房'] }),
     clip('/b.mp4', { tags: ['Fair Use', '街景'] }),
     clip('/c.mp4', { tags: ['Fair Use', '海边'] }),
   ]);
-  assert.ok((weights.get('fair use') ?? 0) < 0.1, `fair use = ${weights.get('fair use')}`);
+  // 判的是倍数，不是绝对值。权重故意永远不到 0——到 0 的话，只放了一段素材的
+  // 文件夹里每个词都是 0 分，每一句都算没配上。素材越多，样板词越接近 0。
+  const boiler = weights.get('fair use') ?? 0;
+  assert.ok(weights.get('机房') > boiler * 5, `机房 = ${weights.get('机房')}，fair use = ${boiler}`);
   assert.ok(weights.get('机房') > 0.5, `机房 = ${weights.get('机房')}`);
+});
+
+await check('只有一段素材时，权重也不是 0（不然一句都配不上）', () => {
+  const weights = termWeights([clip('/only.mp4', { tags: ['天空', '云'] })]);
+  for (const [term, w] of weights) assert.ok(w > 0, `词「${term}」权重是 ${w}`);
 });
 
 console.log('用例 3：稀有词让相关的排前面');

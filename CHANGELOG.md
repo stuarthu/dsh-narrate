@@ -4,6 +4,15 @@ Newest first. Each entry says what a user would notice.
 
 ## Unreleased
 
+- **All four stop points are reachable from a dsh session now.** Four more tools: plan the
+  shots, speak the script, render the video, and record that you said "go ahead". Before this
+  you could only get as far as the second stop point.
+- Asking where a job stands now gives one answer instead of two. The mount used to keep its
+  own idea of the order, which stopped understanding anything past the second stop point.
+- **A folder with only one or two clips works.** Rarity weighting scored every word at exactly
+  zero when a word appeared in every clip, so with a single clip nothing matched and no
+  sentence got a picture. Common words still count for almost nothing; they just no longer
+  count for nothing at all.
 - **A whole video comes out the other end.** Every sentence is spoken, cut, subtitled and
   joined into one file, at 1920x1080 for landscape or 1080x1920 for portrait.
 - A clip that is shorter than its narration no longer stops the render. If it is short by a

@@ -74,15 +74,19 @@ describe('T-06 第 1 层：旁白多长是估出来的', () => {
 });
 
 describe('T-06 第 2 层：文字重叠，标签按稀有度加权', () => {
-  test('每段素材都有的标签一分不加', () => {
+  test('每段素材都有的标签几乎不加分，比只有一段有的低得多', () => {
     const clips = [
       clip('/a.mp4', { tags: ['Fair Use', '机房'] }),
       clip('/b.mp4', { tags: ['Fair Use', '街景'] }),
       clip('/c.mp4', { tags: ['Fair Use', '海边'] }),
     ];
     const weights = termWeights(clips);
-    assert.ok((weights.get('fair use') ?? 0) < 0.1,
-      `每段都有的标签权重该接近 0，实际 ${weights.get('fair use')}`);
+    // 这里断言的是**倍数**，不是绝对值。权重故意不会到 0：到 0 的话，只有一段素材的
+    // 文件夹里每个词都是 0 分，每一句都算没配上。素材越多，样板词越接近 0。
+    const boiler = weights.get('fair use') ?? 0;
+    const rare = weights.get('机房') ?? 0;
+    assert.ok(rare > boiler * 5,
+      `只有一段有的标签该重得多：机房 ${rare} 对 fair use ${boiler}`);
     assert.ok(weights.get('机房') > 0.5, `只有一段有的标签该值钱，实际 ${weights.get('机房')}`);
   });
 
@@ -259,5 +263,47 @@ describe('T-06 评审补的测试', () => {
     });
     assert.equal(withEnglish.candidates[0].clipPath, '/ocean.mp4');
     assert.ok(withEnglish.candidates[0].score > 0, '给了英文查询就该有分');
+  });
+});
+
+describe('T-06 稀有度权重永远不为零', () => {
+  const clip = (name, description, tags) => ({
+    clipPath: `/${name}.mp4`,
+    fromYou: { description, tags },
+    fromMachine: { segments: [{ startSec: 0, endSec: 30, description, tags, confidence: 'high' }] },
+    measured: { durationSec: 30 },
+  });
+
+  test('只有一段素材时也能配上——权重不能是 0', async () => {
+    // 真实场景：用户先放一两段素材试试。`log(N/df)` 在 N=df 时正好是 0，
+    // 于是每一句都算"没配上"，插件看起来完全不工作。
+    const clips = [clip('sky', '蓝天上白云慢慢飘', ['天空', '云'])];
+    const weights = termWeights(clips);
+    for (const [term, w] of weights) {
+      assert.ok(w > 0, `词「${term}」的权重是 ${w}，不能是 0`);
+    }
+    const got = await pickCandidates({ sentence: { id: 'S-001', text: '云在天上飘。' }, clips });
+    assert.ok(got.candidates.length > 0, '该有候选');
+    assert.ok(got.candidates[0].score > 0, `分数该大于 0，实际 ${got.candidates[0].score}`);
+  });
+
+  test('两段素材都有的词也不是 0，但比只有一段有的词低得多', () => {
+    const clips = [
+      clip('a', '森林里的雾', ['fair use', '森林']),
+      clip('b', '城市的车流', ['fair use', '车流']),
+    ];
+    const weights = termWeights(clips);
+    const boiler = weights.get('fair use');
+    const rare = weights.get('森林');
+    assert.ok(boiler > 0, `每段都有的词也不能是 0，实际 ${boiler}`);
+    assert.ok(rare > boiler * 3, `稀有词该明显更重：森林 ${rare} 对 fair use ${boiler}`);
+  });
+
+  test('素材多起来之后，样板词的权重接近 0', () => {
+    const clips = Array.from({ length: 36 }, (_, i) =>
+      clip(`c${i}`, `第 ${i} 段`, ['fair use', 'hd', i === 3 ? 'fire' : `t${i}`]));
+    const weights = termWeights(clips);
+    assert.ok(weights.get('fair use') < 0.1, `36 段都有的词该接近 0，实际 ${weights.get('fair use')}`);
+    assert.ok(weights.get('fire') > 2.5, `只有一段有的词该很重，实际 ${weights.get('fire')}`);
   });
 });
