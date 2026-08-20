@@ -705,3 +705,63 @@ describe('T-12 A-27：一段素材被用了几次，agent 要看得到', () => {
     assert.match(text, /用了 2 次/);
   });
 });
+
+describe('T-12 守门：每个停点都要有硬检查，不能只有一部分工具有', () => {
+  test('停点 2 没点头，narrate_shotplan 必须拒绝', async () => {
+    // 真跑 M6 验收时发现的：narrate_voice 和 narrate_render 都有硬检查，
+    // 只有 narrate_shotplan 漏了，于是停点 2 可以被整个绕掉。
+    // 停下来问用户是这个插件存在的唯一意义，所以每个停点都要有自己的检查。
+    const dir = await tmp();
+    const assets = join(dir, 'assets');
+    await mkdir(assets, { recursive: true });
+    await asset(assets, 'sky');
+    const ctx = mount({ workdir: join(dir, 'jobs') });
+    const started = await call(ctx, 'narrate_start', { idea: '守门' });
+    for (const q of started.questions) {
+      await call(ctx, 'narrate_answer', { jobDir: started.jobDir, questionId: q.id, answer: '答了' });
+    }
+    await call(ctx, 'narrate_script', { jobDir: started.jobDir, sentences: ['云在天上飘。'] });
+    // 这里故意不点停点 2
+    await assert.rejects(
+      () => call(ctx, 'narrate_shotplan', { jobDir: started.jobDir, assetsRoot: assets }),
+      (e) => /E_OUT_OF_ORDER/.test(e.message) && /停点 2/.test(e.message));
+  });
+
+  test('每个要守的停点都真的守住了——逐个试一遍', async () => {
+    const dir = await tmp();
+    const assets = join(dir, 'assets');
+    await mkdir(assets, { recursive: true });
+    const clip = await asset(assets, 'sky', { seconds: 20 });
+    const ctx = mount({ workdir: join(dir, 'jobs'), voice: await fakeVoice(dir) });
+    const started = await call(ctx, 'narrate_start', { idea: '守门' });
+    const jobDir = started.jobDir;
+    const refuses = (tool, args, why) => assert.rejects(
+      () => call(ctx, tool, args), (e) => /E_/.test(e.message), why);
+
+    // 停点 1：问题没答完不许交文稿
+    await refuses('narrate_script', { jobDir, sentences: ['抢跑。'] }, '停点 1 没守住');
+    for (const q of started.questions) {
+      await call(ctx, 'narrate_answer', { jobDir, questionId: q.id, answer: '答了' });
+    }
+    await call(ctx, 'narrate_script', { jobDir, sentences: ['云在天上飘。'] });
+
+    // 停点 2
+    await refuses('narrate_shotplan', { jobDir, assetsRoot: assets }, '停点 2 没守住');
+    await call(ctx, 'narrate_approve', { jobDir, stop: 2 });
+    await call(ctx, 'narrate_index', { assetsRoot: assets, jobDir });
+    await call(ctx, 'narrate_describe', { clipPath: clip,
+      segments: [{ startSec: 0, endSec: 20, description: '蓝天上白云慢慢飘', tags: ['天空', '云'], confidence: 'high' }] });
+    await call(ctx, 'narrate_shotplan', { jobDir, assetsRoot: assets });
+
+    // 停点 3
+    await refuses('narrate_voice', { jobDir }, '停点 3 没守住');
+    await call(ctx, 'narrate_approve', { jobDir, stop: 3 });
+    await call(ctx, 'narrate_voice', { jobDir });
+
+    // 停点 4
+    await refuses('narrate_render', { jobDir }, '停点 4 没守住');
+    await call(ctx, 'narrate_approve', { jobDir, stop: 4 });
+    const made = await call(ctx, 'narrate_render', { jobDir });
+    assert.ok(made.output.endsWith('.mp4'));
+  });
+});

@@ -29,7 +29,7 @@ import { buildQuestions, recordAnswer } from '../src/script/interview.js';
 import { writeScript } from '../src/script/write.js';
 import { measureClip, normalizeMachine, scanAssets } from '../src/assets-index/scan.js';
 import { fingerprintOf, writeMachineSection } from '../src/assets-index/clip-file.js';
-import { nextStep, approveStop, STOP_POINTS } from '../src/flow/run.js';
+import { nextStep, approveStop, assertReady, STOP_POINTS } from '../src/flow/run.js';
 import { pickCandidates, termWeights } from '../src/shotplan/candidates.js';
 import { assignShots } from '../src/shotplan/assign.js';
 import { speakScript, buildAudioOnly } from '../src/voice/speak.js';
@@ -287,7 +287,11 @@ function buildTools(config) {
         '扫一遍素材文件夹。便宜的事当场做完（读用户写的描述和标签、量时长），' +
         '贵的事交给你：返回值里的 needsUnderstanding 是需要你去理解的素材。' +
         '对每一个调 video_understand，再把结果用 narrate_describe 交回来。',
-      parameters: obj({ assetsRoot: str('素材文件夹（必填）') }, ['assetsRoot']),
+      parameters: obj({
+        assetsRoot: str('素材文件夹（必填）'),
+        jobDir: str('工作目录。**带上它**，这样素材文件夹会被记下来：后面挑素材不用再传，'
+          + '中途断了也知道素材在哪'),
+      }, ['assetsRoot']),
       output: {
         schema: obj({
           needsUnderstanding: arr(str('素材绝对路径'), '需要你去理解的素材'),
@@ -309,9 +313,18 @@ function buildTools(config) {
       },
       async execute(args) {
         const assetsRoot = requireString(args, 'assetsRoot');
+        const jobDir = typeof asRecord(args).jobDir === 'string' && asRecord(args).jobDir.trim() !== ''
+          ? asRecord(args).jobDir.trim() : '';
         try {
           // 不传 understand 就是只报不做——宿主调不到模型，理解只能由你来。
           const result = await scanAssets({ assetsRoot });
+          // 记下素材在哪。这既让次序能往前走（见 run.js 里 index 那一步的说明），
+          // 也让中途断了之后还知道这条视频用的是哪个文件夹。
+          if (jobDir !== '') {
+            const handle = await openJob(jobDir, 'flow');
+            handle.set('meta', { ...asRecord(handle.data.meta), assetsRoot: resolve(assetsRoot) });
+            await handle.save();
+          }
           return {
             needsUnderstanding: result.needsUnderstanding,
             reused: result.reused,
@@ -449,12 +462,12 @@ function buildTools(config) {
         'time lapse` 配上了一段工业烟雾的延时，改成 `clouds bright sky` 就对了。',
       parameters: obj({
         jobDir: str('工作目录（必填）'),
-        assetsRoot: str('素材文件夹（必填）'),
+        assetsRoot: str('素材文件夹。narrate_index 带过 jobDir 的话可以不传'),
         queries: arr(obj({
           sentenceId: str('句子编号'),
           englishQuery: str('这一句画面的英文关键词，写主体不写手法'),
         }, ['sentenceId', 'englishQuery']), '每句一个英文查询，用来跨语言匹配'),
-      }, ['jobDir', 'assetsRoot']),
+      }, ['jobDir']),
       output: {
         schema: obj({
           shots: arr(SHOT, '每句配到的画面'),
@@ -491,12 +504,23 @@ function buildTools(config) {
       },
       async execute(args) {
         const jobDir = requireString(args, 'jobDir');
-        const assetsRoot = requireString(args, 'assetsRoot');
         const queries = new Map((asRecord(args).queries ?? [])
           .filter((q) => typeof q?.sentenceId === 'string')
           .map((q) => [q.sentenceId, String(q.englishQuery ?? '')]));
         try {
           const job = await readJob(jobDir);
+          // 没传就用 narrate_index 记下的那个。两个都没有才报错。
+          const given = asRecord(args).assetsRoot;
+          const assetsRoot = typeof given === 'string' && given.trim() !== ''
+            ? given.trim() : String(job.meta?.assetsRoot ?? '');
+          if (assetsRoot === '') {
+            throw new Error('E_BAD_ARGUMENT: 不知道素材在哪。传 assetsRoot，'
+              + '或者先调一次 narrate_index 并带上 jobDir');
+          }
+          // **停点 2 没点头就不许做对应表。** 别的工具靠底层的 assertReady 守住，
+          // 这一步原来漏了，于是停点 2 可以被整个绕掉——真跑 M6 验收时抓到的。
+          // 停下来问用户是这个插件存在的唯一意义，每个停点都要有自己的检查。
+          assertReady(job, 'shotplan');
           const sentences = (job.script?.sentences ?? []).map((s) => ({
             ...s,
             englishQuery: queries.get(s.id) ?? '',

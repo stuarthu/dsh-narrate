@@ -26,6 +26,15 @@ export const STOP_POINTS = Object.freeze({ interview: 1, script: 2, shotplan: 3,
  */
 const NEEDS_APPROVAL = Object.freeze(['script', 'shotplan', 'voice']);
 
+/**
+ * 只提醒、不阻塞的步骤。
+ *
+ * 素材入库是唯一一个：索引存在素材**旁边**，不在工作文件里，所以"入库完了没有"
+ * 插件根本无法知道——上一次会话扫过的这次也算。拿它当阻塞条件会白拦一堆正常操作。
+ * `nextStep` 照样会提醒去做，`assertReady` 不会因为它拦人。
+ */
+const ADVISORY = Object.freeze(['index']);
+
 /** 每一步该调哪个工具。说不出工具名的次序说明等于没说。 */
 const TOOL_FOR = Object.freeze({
   interview: 'narrate_answer',
@@ -62,8 +71,15 @@ function done(job, step) {
       return questions.length > 0 && questions.every((q) => clean(q.answer) !== '');
     }
     case 'script': return sentencesOf(job).length > 0;
-    // 素材入库没有"做完"这回事——素材随时能加。有画面对应表就说明已经够用了。
-    case 'index': return shotsOf(job).length > 0 || asRecord(job).shotplan !== undefined;
+    // 素材入库没有"做完"这回事——素材随时能加，而索引存在素材旁边，不在工作文件里。
+    // 但**这一步必须有个能往前走的条件**，否则就是死循环：真跑 M6 验收时撞上过——
+    // 完成条件原来写的是"画面对应表存在"，而 nextStep 在这一步没完成时说"调
+    // narrate_index"，于是扫完素材、交完理解，状态还是说"调 narrate_index"，
+    // 照插件的话走永远到不了 narrate_shotplan。
+    // 现在的条件是"记下了素材文件夹在哪"——扫过一遍就有，也顺便解决了续跑时
+    // 没人知道素材在哪的问题。
+    case 'index': return clean(asRecord(asRecord(job).meta).assetsRoot) !== ''
+      || asRecord(job).shotplan !== undefined;
     case 'shotplan': return asRecord(job).shotplan !== undefined;
     case 'voice': return clipsOf(job).length > 0;
     case 'render': return clean(asRecord(asRecord(job).render).output) !== '';
@@ -91,7 +107,8 @@ export function nextStep(job) {
       } else if (step === 'script') {
         why = '问完了。自己写出按句分好的文稿，再交上来。';
       } else if (step === 'index') {
-        why = '素材还没入库。扫一遍素材文件夹，需要理解的交给你去理解。';
+        why = '素材还没入库。调 narrate_index 扫一遍素材文件夹，**带上 jobDir**，'
+          + '这样我才记得住素材在哪；需要理解的它会列给你，你理解完用 narrate_describe 交回来。';
       } else if (step === 'shotplan') {
         why = '为每句挑一段素材，做出画面对应表，挑不到的要列出来。';
       } else if (step === 'voice') {
@@ -139,6 +156,7 @@ export function assertReady(job, step) {
   if (index < 0) throw new FlowError('E_NO_SUCH_STEP', `没有这一步：${step}`);
 
   for (const earlier of STEPS.slice(0, index)) {
+    if (ADVISORY.includes(earlier)) continue;
     if (!done(job, earlier)) {
       throw new FlowError(
         'E_OUT_OF_ORDER',

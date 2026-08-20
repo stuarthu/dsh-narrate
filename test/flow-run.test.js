@@ -237,3 +237,100 @@ describe('T-08 续跑', () => {
     }
   });
 });
+
+describe('次序不能有死循环：照 nextStep 走一定要走到 done', () => {
+  /** 只照 nextStep 说的做，看会不会原地打转。 */
+  const walk = (job, act) => {
+    const seen = [];
+    for (let i = 0; i < 30; i += 1) {
+      const where = nextStep(job);
+      seen.push(`${where.step}/${where.tool}`);
+      if (where.step === 'done') return { seen, stuck: false };
+      const before = JSON.stringify(job);
+      job = act(job, where);
+      if (JSON.stringify(job) === before) {
+        return { seen, stuck: true, at: `${where.step}/${where.tool}` };
+      }
+    }
+    return { seen, stuck: true, at: '走了 30 步还没完' };
+  };
+
+  test('素材入库那一步不会把人困住', () => {
+    // 真跑 M6 验收时发现的：done(job,'index') 的条件是"shotplan 节存在"，
+    // 而 nextStep 在 index 没做完时说"调 narrate_index"。于是扫完素材、交完理解，
+    // 状态还是说"调 narrate_index"——照插件的话走永远到不了 narrate_shotplan。
+    let job = {
+      meta: { approvedStops: [2] },
+      interview: { questions: [{ id: 'IQ-1', answer: '答了' }] },
+      script: { sentences: [{ id: 'S-001', text: '一句话。' }] },
+    };
+    const where = nextStep(job);
+    assert.equal(where.step, 'index');
+    // 做完 index 该做的事（扫素材、记下素材在哪）之后，就必须往前走
+    const after = { ...job, meta: { ...job.meta, assetsRoot: '/some/assets' } };
+    const next = nextStep(after);
+    assert.notEqual(next.step, 'index',
+      `记下素材文件夹之后就不该再停在 index，实际还是 ${next.step}/${next.tool}`);
+    assert.equal(next.step, 'shotplan');
+    assert.equal(next.tool, 'narrate_shotplan');
+  });
+
+  test('从空任务照着走能走到 done，不打转', () => {
+    const got = walk({ meta: {} }, (job, where) => {
+      switch (where.step) {
+        case 'interview':
+          return { ...job, interview: { questions: [{ id: 'IQ-1', answer: '答了' }] } };
+        case 'script':
+          if (where.waitingForUser) {
+            return { ...job, meta: { ...job.meta, approvedStops: [...(job.meta.approvedStops ?? []), 2] } };
+          }
+          return { ...job, script: { sentences: [{ id: 'S-001', text: '一句话。' }] } };
+        case 'index':
+          return { ...job, meta: { ...job.meta, assetsRoot: '/some/assets' } };
+        case 'shotplan':
+          if (where.waitingForUser) {
+            return { ...job, meta: { ...job.meta, approvedStops: [...(job.meta.approvedStops ?? []), 3] } };
+          }
+          return { ...job, shotplan: { shots: [{ sentenceId: 'S-001', assetPath: '/a.mp4' }], missing: [] } };
+        case 'voice':
+          if (where.waitingForUser) {
+            return { ...job, meta: { ...job.meta, approvedStops: [...(job.meta.approvedStops ?? []), 4] } };
+          }
+          return { ...job, voice: { clips: [{ sentenceId: 'S-001', durationSec: 2 }] } };
+        case 'render':
+          return { ...job, render: { output: '/out.mp4' } };
+        default:
+          return job;
+      }
+    });
+    assert.equal(got.stuck, false, `卡在 ${got.at}。走过的路：${got.seen.join(' → ')}`);
+    assert.ok(got.seen.includes('index/narrate_index'), '路上该经过素材入库');
+    assert.ok(got.seen.includes('render/narrate_render'), '路上该经过渲染');
+  });
+});
+
+describe('素材入库是建议，不是关卡', () => {
+  const ready = {
+    meta: { approvedStops: [2] },
+    interview: { questions: [{ id: 'IQ-1', answer: '答了' }] },
+    script: { sentences: [{ id: 'S-001', text: '一句话。' }] },
+  };
+
+  test('没记下素材文件夹也不拦着做对应表', () => {
+    // 索引存在素材旁边，不在工作文件里，所以"素材入库完了没有"插件根本无法知道:
+    // 上一次会话扫过的这次也算。拿它当阻塞条件会白拦一堆正常操作。
+    assert.doesNotThrow(() => assertReady(ready, 'shotplan'));
+  });
+
+  test('但停点 2 没点头照样拦住', () => {
+    assert.throws(() => assertReady({ ...ready, meta: {} }, 'shotplan'),
+      (e) => e.code === 'E_OUT_OF_ORDER' && /停点 2/.test(e.message));
+  });
+
+  test('nextStep 还是会提醒去入库——建议不等于不说', () => {
+    const where = nextStep(ready);
+    assert.equal(where.step, 'index');
+    assert.equal(where.tool, 'narrate_index');
+    assert.match(where.why, /narrate_index/);
+  });
+});
