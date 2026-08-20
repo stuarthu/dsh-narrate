@@ -1,0 +1,45 @@
+{
+  "name": "dsh-narrate",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "DeepSeek Harness (dsh) plugin: turn one idea into a narrated video cut from your own asset folder, stopping four times to ask you first.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek-harness-plugin",
+    "cordis",
+    "video",
+    "video-editing",
+    "tts",
+    "text-to-speech",
+    "subtitles",
+    "ffmpeg",
+    "ai-agent",
+    "content-creation"
+  ],
+  "license": "MIT",
+  "author": "Stuart Hu",
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'"
+  },
+  "files": [
+    "host",
+    "src",
+    "cordis.patch.yml",
+    "README.md",
+    "README-zh.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "node-edge-tts": "^1.2.10"
+  }
+}
