@@ -2,7 +2,8 @@
 
 # dsh-narrate
 
-Version 0.1.0
+Version 0.1.0 in `package.json`, **nothing released yet**. What is described
+below is what the code on `main` does.
 
 A [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/DeepSeek-Harness) plugin.
 You give it one idea. It stops four times to ask you first. Then it builds a video
@@ -11,37 +12,39 @@ and the words burned onto the picture.
 
 Landscape (16:9) for YouTube and bilibili. Portrait (9:16) for TikTok and Shorts.
 
-## Status: early
+## Status: it works end to end, and it is not released yet
 
-Read this before you install. Version 0.1.0 is the **first milestone only**.
+Read this before you install.
 
 **What works today**
 
-- Speak one sentence, trim the silence off both ends, and measure how long the
-  audio really is.
-- Cut a clip from one of your own video files to exactly that length, mix the
-  narration in, and burn the sentence onto the picture as a subtitle.
-- A job file that every stage reads and writes, where a stage can only write its
-  own section. Writing another stage's section raises an error at once.
-- A bundled voice engine that needs no API key, and a command-line contract so
-  you can swap in any other engine by changing configuration only.
+- One idea becomes one finished video. Every sentence is spoken, matched to a clip
+  from your own folder, cut to the length of its narration, subtitled, and joined
+  into a single file — 1920x1080 for landscape, 1080x1920 for portrait.
+- **All four stop points.** Nothing moves past one without a clear yes from you,
+  and each is a hard check inside a tool rather than a line of instruction.
 - Indexing your asset folder: it walks the folder (following symlinks, so clips on
   an external drive are found), reads your descriptions and tags from any of seven
-  places, and only asks the understanding step about clips whose fingerprint changed.
-  One bad clip never sinks the whole run.
+  places, and only asks the understanding step about clips whose fingerprint
+  changed. One bad clip never sinks the whole run.
+- Matching a Chinese script against English clip metadata, through an English
+  query the agent supplies. Rare words count for more than boilerplate tags.
+- A bundled voice engine that needs no API key, and a command-line contract so you
+  can swap in any other engine by changing configuration only.
 
-**What does not work yet**
+**What is still missing**
 
-- There is no command that takes an idea and gives you a video. You write the
-  job file by hand for now.
-- The understanding step is a plug-in point, not yet wired to a real one, so the
-  machine-written half of each description is a placeholder. Your own descriptions
-  and tags are real and already used.
-- No script writing, no shot planning, no review stops.
-- The plugin does not mount into dsh yet.
-
-If you want a finished tool today, use one of the projects in
-[Prior art](#prior-art) instead. Come back when this reaches version 1.0.
+- **It is not on npm yet.** `npm install dsh-narrate` does not work. Install from a
+  local checkout — see [Install](#install).
+- The understanding step is a plug-in point. The plugin tells the agent which clips
+  need looking at; how well it answers is up to the agent and its tools. With no
+  understanding at all, matching still works from your own descriptions and tags,
+  just less well.
+- A landscape clip in a portrait video gets wide black bars above and below. The
+  picture keeps its shape rather than being stretched, which is honest but is not
+  what TikTok and Shorts usually look like. Cropping to fill is not implemented.
+- Nothing is uploaded anywhere. There is no platform account, no scheduling, no
+  thumbnail. This plugin makes a file.
 
 ## Privacy: read this first
 
@@ -77,6 +80,23 @@ lost. But anything **you** typed into that file would be gone. Put writing you w
 in a `.narrate.txt` file instead — see the next section.
 
 Nothing is written anywhere else in your asset folder, and no clip is ever modified.
+
+### Where the video itself is written
+
+Everything the plugin makes for one video lives in one folder, by default
+`.narrate/<short name>/` under the directory you started dsh in:
+
+```
+.narrate/clouds/
+  job.json          every stage reads and writes this, one section each
+  audio/S-001.wav   one recording per sentence
+  preview.wav       the audio-only file you listen to at stop point 4
+  segments/S-001.mp4  one cut, subtitled piece per sentence
+  out/clouds.mp4    the finished video
+```
+
+Nothing is deleted between runs, so a redo only remakes what changed: a sentence
+you did not edit keeps its recording rather than being spoken again.
 
 ## How to describe a clip
 
@@ -126,15 +146,16 @@ Two things worth knowing:
 
 ## Install
 
-```sh
-npm install dsh-narrate
-```
+The package is not on npm yet, so install it from a checkout:
 
 ```sh
-dsh plugin --profile tui add dsh-narrate
+git clone https://github.com/stuarthu/dsh-narrate
+dsh plugin --profile tui add link:/path/to/dsh-narrate
 ```
 
-That registers six tools the agent can call:
+Once it is released, `dsh plugin --profile tui add dsh-narrate` will be enough.
+
+That registers ten tools the agent can call:
 
 | Tool | What it does |
 | --- | --- |
@@ -143,6 +164,10 @@ That registers six tools the agent can call:
 | `narrate_script` | Store the script the agent wrote, numbered. **Refuses while a question is unanswered** |
 | `narrate_index` | Walk your asset folder and say which clips still need understanding |
 | `narrate_describe` | Store what the agent understood about one clip |
+| `narrate_shotplan` | Choose a clip for every sentence, and list the sentences with no match |
+| `narrate_voice` | Speak every sentence, and build the audio-only file for stop point four |
+| `narrate_render` | Cut, mix, subtitle and join. **Refuses until stop point four is approved** |
+| `narrate_approve` | Record that you said go ahead at one stop point |
 | `narrate_status` | Where this video is, what it is waiting for, what comes next |
 
 The split is deliberate and it comes from how dsh works: the host cannot call a
@@ -151,13 +176,13 @@ judgement — it writes the script, it calls `video_understand`, it talks to you
 Because of that, every "do not skip this" is a hard check inside a tool rather
 than a line of instruction the agent could ignore.
 
-## How it will work
+## How it works
 
 Five stages, four places where it stops and waits for you.
 
 | Stop | When | What you see | What you do |
 | --- | --- | --- | --- |
-| 1 | Before the script is written | At least three questions: how long, who is watching, what tone, the one line you want remembered | Answer them |
+| 1 | Before the script is written | Four questions: how long, who is watching, what tone, the one line you want remembered | Answer them. Answering *is* the yes — there is nothing else to approve |
 | 2 | Script finished | The full script, one numbered sentence per line | Approve it, or change it |
 | 3 | Before any audio is made | The shot list, plus a list of the sentences that have **no matching clip** | Add clips, edit the shot list, or say go ahead |
 | 4 | Before rendering | An audio-only file: the narration with no picture | Listen to the pace, approve or redo a few lines |
@@ -165,9 +190,52 @@ Five stages, four places where it stops and waits for you.
 Nothing moves past a stop without a clear yes from you. That is the point of the
 plugin. Other tools do the whole job in one go and only show you the result.
 
+Stop point four is the one people skip and regret. Listen to the narration with no
+picture: the picture is distracting, and if the pace is wrong the whole video has
+to be made again.
+
 Every stage reads a file and writes a file, so nothing is hidden and any single
-step can be redone on its own. Picture length always follows the real length of
-the audio, never the other way round — the voice keeps its natural pace.
+step can be redone on its own. If a session is interrupted, `narrate_status` reads
+the file and says exactly where things stand.
+
+### What a session looks like
+
+You say one line. The agent does the rest, stopping four times:
+
+```
+you     "make me something about how fast clouds move"
+agent   narrate_start   → four questions, asked in your language
+you     answers                                                      ← stop 1
+agent   narrate_script  → the script, one sentence per line
+you     "the third line is too long, cut it"                         ← stop 2
+agent   narrate_index   → 36 clips found, 4 need looking at
+        narrate_describe × 4
+        narrate_shotplan → 8 sentences matched, 1 has no clip
+you     "drop that sentence"                                         ← stop 3
+agent   narrate_voice   → preview.wav, 41 seconds
+you     listen, "a bit fast but fine"                                ← stop 4
+agent   narrate_render  → out/clouds.mp4, 41 seconds, 1920x1080
+```
+
+### Picture length follows audio length
+
+The narration keeps its natural pace, always. Changing the speaking rate to fit a
+shot is what makes narration sound fake. So the picture is what bends:
+
+| The clip is | What happens |
+| --- | --- |
+| Longer than the narration | Cut to the narration's length |
+| Short by 20% or less | Slowed down. At this much it does not show |
+| Short by more than 20% | Looped from the start of the chosen window |
+| Missing a picture at that point | Reported to you as a problem, not filled in with something else |
+
+### Clips of any size and frame rate
+
+Each clip is fitted into the target frame with black bars rather than stretched,
+then the subtitle is burned on top at the final resolution — so subtitles are the
+same size whatever the source was. Every part is encoded to one shape, so joining
+them needs no re-encoding and loses no quality, and the finished file is checked by
+decoding all of it. A join can break without ffmpeg reporting an error.
 
 ## Swapping the voice engine
 
@@ -210,8 +278,18 @@ The full contract, including every error name, is in
 npm test
 ```
 
-112 tests. Two of them reach the Microsoft speech endpoint; with no network they
+303 tests. Two of them reach the Microsoft speech endpoint; with no network they
 skip out loud instead of failing. Everything else runs offline.
+
+The tests cut real video and real audio, so `ffmpeg` and `ffprobe` must be on your
+`PATH` and a font for your language must be installed.
+
+There is a second, separate set of checks written from the acceptance criteria
+rather than from the code:
+
+```sh
+sh docs/crew/qa/run-all.sh
+```
 
 ## Design documents
 
@@ -224,6 +302,7 @@ the reasoning is written down rather than lost:
 | [`docs/crew/hld.md`](docs/crew/hld.md) | The modules, where the boundaries fall, which one is riskiest |
 | [`docs/crew/api/`](docs/crew/api) | The three boundary contracts, each with named errors and a test per side |
 | [`docs/crew/adr/`](docs/crew/adr) | Five decisions, each with the options weighed and what it costs |
+| [`docs/crew/crd/`](docs/crew/crd) | Change requests: a decision that had to be revisited, and why |
 | [`docs/crew/tasks.md`](docs/crew/tasks.md) | Every task, the files it owns, and the check it delivers |
 
 The documents are written in Chinese. The code, commands and file names are in
