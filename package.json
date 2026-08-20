@@ -21,7 +21,7 @@
   "license": "MIT",
   "author": "Stuart Hu",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "test": "node --test 'test/**/*.test.js'"

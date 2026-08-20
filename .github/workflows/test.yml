@@ -1,0 +1,71 @@
+name: Test
+
+# Runs on every branch push and every pull request. Tags are excluded: naming
+# `branches` turns tag pushes off, and the publish workflow already runs the same
+# checks before it publishes, so a release would otherwise test itself twice.
+#
+# The point of this workflow is that a broken commit on main is found the day it
+# lands, not months later when someone cuts a release.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  # One run per branch. A new push cancels the previous run, which is safe here
+  # because nothing is published and nothing is written outside the runner.
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # one Node version failing should not hide the other
+      matrix:
+        # The versions package.json claims to support. `node --test` only takes
+        # glob patterns on newer Node, and relying on the shell to expand them
+        # instead would break on Windows, so `engines` says >= 22 and this matrix
+        # is what proves that claim.
+        node: ["22", "24"]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+
+      # The tests cut real video and real audio, so these are not optional.
+      - name: Ensure ffmpeg is available
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | head -1
+
+      # Without a CJK font every burned Chinese subtitle renders as empty boxes,
+      # and the test that checks for boxes would fail for a confusing reason.
+      - name: Ensure a CJK font is available
+        run: |
+          if [ "$(fc-list :lang=zh 2>/dev/null | wc -l)" -eq 0 ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fi
+          echo "CJK fonts found: $(fc-list :lang=zh | wc -l)"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Two tests reach the Microsoft speech endpoint used by the bundled voice
+      # engine. With no network they skip out loud rather than failing, so a red
+      # run here always means our own code is wrong.
+      - name: Run tests
+        run: npm test
+
+      # QA lives apart from the unit tests and is written to be re-runnable, so
+      # CI runs it too. See docs/crew/qa/.
+      - name: Run QA
+        run: sh docs/crew/qa/run-all.sh

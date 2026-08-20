@@ -116,7 +116,8 @@ Two things worth knowing:
 
 ## Requirements
 
-- Node.js 20 or newer.
+- Node.js 22 or newer. The test runner needs a newer Node for the glob it uses, and
+  relying on the shell to expand it instead would break on Windows.
 - `ffmpeg` and `ffprobe` on your `PATH`. Check with `ffmpeg -version`.
   Set `DSH_FFMPEG_PATH` and `DSH_FFPROBE_PATH` if they live somewhere else.
 - At least one font that covers the language you write in. For Chinese, install

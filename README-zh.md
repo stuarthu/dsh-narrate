@@ -102,7 +102,8 @@ json，那些元数据是有用的：插件会读它的 `title`、`description`�
 
 ## 需要什么
 
-- Node.js 20 或更新。
+- Node.js 22 或更新。测试运行器用到的 glob 需要较新的 Node，而改成靠 shell 展开
+  在 Windows 上不成立。
 - `PATH` 里有 `ffmpeg` 和 `ffprobe`。用 `ffmpeg -version` 检查。
   如果装在别处，设 `DSH_FFMPEG_PATH` 和 `DSH_FFPROBE_PATH`。
 - 至少一个覆盖你写作语言的字体。中文请装 `fonts-noto-cjk` 或任何一个中日韩字体。

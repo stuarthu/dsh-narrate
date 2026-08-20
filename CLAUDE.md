@@ -150,6 +150,21 @@ running against real data, not by thinking.
     placeholder. When the plugin replaces output of its own, it says so rather than letting
     the line vanish.
 
+## CI
+
+Two workflows, and the split is deliberate:
+
+| Workflow | Fires on | Why |
+| --- | --- | --- |
+| `test.yml` | every branch push and every pull request | a broken commit on `main` is found the day it lands, not when someone cuts a release |
+| `publish.yml` | `v*` tags only | work in progress cannot ship by accident |
+
+`test.yml` names `branches`, which turns tag pushes off, so a release does not run the same
+checks twice. It runs a Node matrix of 22 and 24 — the versions `engines` claims — because
+`node --test` only takes glob patterns on newer Node, and letting the shell expand them
+instead would break on Windows. Both workflows install `ffmpeg` and a CJK font first, and
+`test.yml` also runs the QA scripts.
+
 ## Releases
 
 `.github/workflows/publish.yml` fires on `v*` **tags only**. A push to `main` never
