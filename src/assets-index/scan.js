@@ -5,6 +5,11 @@
 // 收一个"理解器"函数，真正的接线在 dsh 挂载那一步。副作用是测试能传一个假的
 // 并数它被问了几次，而"没变的素材一次都不该问"正是本模块最要紧的保证。
 //
+// **不传 `understand` 就是「只报不做」模式**：需要理解的素材列进 `needsUnderstanding`
+// 而不去理解。这是宿主调不到模型的必然结果——挂载之后，扫描先把清单交给 agent，
+// agent 拿它去调 `video_understand`，再把结果交回来。便宜的事（翻译你的输入、量
+// 时长）照样当场做完。
+//
 // 另一条贯穿全文的规则：**一个坏素材不能拖垮整次入库。** 几百个素材扫到第 30 个
 // 出错就全盘失败，用户会不知道前 29 个到底存下来没有。所以逐个素材兜错，
 // 最后一起报。唯一例外是撞名——那是整个文件夹的问题，在动手之前就该停。
@@ -136,7 +141,7 @@ export async function measureClip(clipPath) {
  * 一个时间段，把握标 low——一句话代表不了十分钟里的几十个画面，说自己没把握
  * 才是诚实的。
  */
-function normalizeMachine(raw, clipPath, durationSec) {
+export function normalizeMachine(raw, clipPath, durationSec) {
   const round = (n) => Math.round(n * 1000) / 1000;
 
   const given = Array.isArray(raw?.segments) && raw.segments.length > 0
@@ -192,6 +197,7 @@ export async function scanAssets({ assetsRoot, understand, measure = measureClip
   const clips = [];
   const understood = [];
   const reused = [];
+  const needsUnderstanding = [];
   // 认不出扩展名的文件先记下来。它们可能就是用户想用的素材，
   // 静默跳过等于骗人。
   const skipped = unknownPaths.map((clipPath) => ({
@@ -230,6 +236,14 @@ export async function scanAssets({ assetsRoot, understand, measure = measureClip
         continue;
       }
 
+      // 只报不做：把需要理解的列出来，交给能调模型的那一侧。
+      if (!understand) {
+        needsUnderstanding.push(clipPath);
+        clips.push({ clipPath, record: existing });
+        onEvent?.({ kind: 'needs-understanding', clipPath });
+        continue;
+      }
+
       let raw;
       try {
         raw = await understand(clipPath);
@@ -256,5 +270,5 @@ export async function scanAssets({ assetsRoot, understand, measure = measureClip
     }
   }
 
-  return { clips, understood, reused, skipped };
+  return { clips, understood, reused, needsUnderstanding, skipped };
 }

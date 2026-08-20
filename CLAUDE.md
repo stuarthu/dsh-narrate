@@ -116,7 +116,19 @@ running against real data, not by thinking.
     fails because the behaviour is missing and not because the runner could not start, then
     write the smallest code that passes. A change without the red run is not finished.
 
-11. **Report what happened.** A skipped test says it skipped. A placeholder says it is a
+11. **A tool's schema uses only the keywords dsh allows.** `tools.register` validates
+    `output.schema` against a narrow subset — `type`, `oneOf`, `properties`, `required`,
+    `additionalProperties`, `items`, `enum`, `const`, plus `description`, `title`, `default`,
+    `examples`. `minLength`, `pattern` and `format` are rejected, and a rejection throws at
+    mount time, which breaks the user's whole profile. `output` itself is required and
+    `output.render` must be a function. `test/mount.test.js` checks every schema against a
+    copy of that rule, and against dsh's own validator when it can be imported.
+
+12. **The agent cannot be forced into an order.** The host has no way to make the agent call
+    tools in sequence, so every rule that matters is a check inside `execute`. A rule that
+    lives only in a tool's `description` is a suggestion.
+
+13. **Report what happened.** A skipped test says it skipped. A placeholder says it is a
     placeholder. When the plugin replaces output of its own, it says so rather than letting
     the line vanish.
 
@@ -135,10 +147,11 @@ Release flow: bump `version` in `package.json`, add the `CHANGELOG.md` section, 
 `main`, then push the matching `v*` tag. The workflow fails loudly if the tag and
 `package.json` disagree.
 
-**`package.json` deliberately declares no `dsh.bundle` yet.** `dsh-app-boot` throws when a
-bundle's patch file cannot be read (`dsh-app-boot/lib/index.js`), so declaring the mount
-before `cordis.patch.yml` exists would stop a user's whole dsh profile from booting. The
-field goes back in with the task that builds the mount.
+**`dsh.bundle` and `cordis.patch.yml` must ship together.** `dsh-app-boot` throws when a
+bundle's patch file cannot be read (`dsh-app-boot/lib/index.js`), so a declared mount whose
+patch file is missing stops a user's whole dsh profile from booting. `0.1.0` shipped with the
+field deliberately absent for exactly that reason; it went back in with the mount. If you
+ever remove `cordis.patch.yml` from `files`, remove the `dsh` block in the same commit.
 
 ## Privacy
 

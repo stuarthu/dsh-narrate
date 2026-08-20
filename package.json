@@ -27,8 +27,10 @@
     "test": "node --test 'test/**/*.test.js'"
   },
   "files": [
+    "host",
     "src",
     "docs/crew",
+    "cordis.patch.yml",
     "README.md",
     "README-zh.md",
     "CHANGELOG.md",
@@ -44,5 +46,10 @@
   "homepage": "https://github.com/stuarthu/dsh-narrate#readme",
   "bugs": {
     "url": "https://github.com/stuarthu/dsh-narrate/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }

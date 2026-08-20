@@ -1,0 +1,17 @@
+# dsh-narrate 组合包补丁：把插件行插入 profile。
+#
+# 装法：dsh plugin --profile tui add dsh-narrate
+#
+# 这个插件注册六个面向 agent 的工具（narrate_start / narrate_answer /
+# narrate_script / narrate_index / narrate_describe / narrate_status）。
+# 宿主这一侧只管规则、校验、编号和存盘；写文稿、补问、调 video_understand 都由
+# agent 做——宿主调不到模型。理由写在 docs/crew/hld.md 第 4.1 节。
+#
+# 行按 id 寻址，所以你自己的 cordis.patch.yml 可以覆盖或停用它。
+- insert:
+    - id: narrate
+      name: 'dsh-narrate/host/narrate.js'
+      # config:
+      #   # 每条视频的工作目录放在哪。相对路径按你启动 dsh 的目录算。
+      #   # 里面一条视频一个子目录，工作文件叫 job.json。
+      #   workdir: '.narrate'

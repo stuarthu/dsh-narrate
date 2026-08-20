@@ -129,10 +129,26 @@ Two things worth knowing:
 npm install dsh-narrate
 ```
 
-**0.1.0 is a plain npm library, not yet a dsh bundle.** It deliberately does not
-declare `dsh.bundle` in its `package.json`, because the mount is not built yet
-and a bundle whose patch file is missing stops a dsh profile from booting at all.
-The mount arrives with the milestone that finishes the plugin.
+```sh
+dsh plugin --profile tui add dsh-narrate
+```
+
+That registers six tools the agent can call:
+
+| Tool | What it does |
+| --- | --- |
+| `narrate_start` | Take your one idea, and hand back the questions to ask you first |
+| `narrate_answer` | Record one of your answers |
+| `narrate_script` | Store the script the agent wrote, numbered. **Refuses while a question is unanswered** |
+| `narrate_index` | Walk your asset folder and say which clips still need understanding |
+| `narrate_describe` | Store what the agent understood about one clip |
+| `narrate_status` | Where this video is, what it is waiting for, what comes next |
+
+The split is deliberate and it comes from how dsh works: the host cannot call a
+model. So the plugin holds the rules and the memory, and the agent holds the
+judgement — it writes the script, it calls `video_understand`, it talks to you.
+Because of that, every "do not skip this" is a hard check inside a tool rather
+than a line of instruction the agent could ignore.
 
 ## How it will work
 

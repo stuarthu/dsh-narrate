@@ -114,9 +114,24 @@ json，那些元数据是有用的：插件会读它的 `title`、`description`�
 npm install dsh-narrate
 ```
 
-**0.1.0 是一个普通的 npm 库，还不是 dsh bundle。** 它故意不在 `package.json` 里声明
-`dsh.bundle`，因为挂载部分还没做，而一个 patch 文件缺失的 bundle 会让整个 dsh profile
-启动不起来。挂载会在做完插件的那个里程碑一起交付。
+```sh
+dsh plugin --profile tui add dsh-narrate
+```
+
+装完会注册六个 agent 能调的工具：
+
+| 工具 | 做什么 |
+| --- | --- |
+| `narrate_start` | 接下你那一句想法，回一组要先问你的问题 |
+| `narrate_answer` | 记下你的一个回答 |
+| `narrate_script` | 把 agent 写好的文稿编号存下。**问题没答完它会拒绝** |
+| `narrate_index` | 扫一遍素材文件夹，说清哪几段还需要理解 |
+| `narrate_describe` | 把 agent 对一段素材的理解存下来 |
+| `narrate_status` | 这条视频做到哪了、在等什么、下一步做什么 |
+
+这个分工是刻意的，而且来自 dsh 的形状：**宿主调不到模型。** 所以插件管规则和记忆，
+agent 管判断——文稿是它写的，`video_understand` 是它调的，跟你说话也是它。
+正因为这样，每一条"不能跳过"都是工具里的硬检查，不是一句 agent 可以无视的说明。
 
 ## 它以后会怎么工作
 

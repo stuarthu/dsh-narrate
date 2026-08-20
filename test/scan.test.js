@@ -371,3 +371,28 @@ describe('T-04 评审补的测试', () => {
     assert.equal(r.understood.length, 1, 'a 该照样做完');
   });
 });
+
+describe('T-11 用的：只报不做模式', () => {
+  test('不传 understand 时，需要理解的素材进 needsUnderstanding，一次也不调', async () => {
+    const root = await tmp();
+    for (const n of ['a.mp4', 'b.mp4']) await put(root, n);
+    const r = await scanAssets({ assetsRoot: root, measure: fakeMeasure() });
+    assert.deepEqual(r.needsUnderstanding.map((p) => basename(p)).sort(), ['a.mp4', 'b.mp4']);
+    assert.deepEqual(r.understood, []);
+    assert.deepEqual(r.skipped, []);
+    // 便宜的事照样做完了
+    const rec = await readClipFile(join(root, 'a.mp4'));
+    assert.equal(rec.measured.durationSec, 30, '时长该已经量好');
+    assert.deepEqual(rec.fromMachine, {}, '理解那一节该还是空的');
+    assert.ok(rec.fromYou.tags.length > 0, '你的输入该已经翻译好');
+  });
+
+  test('已经理解过的素材不会进 needsUnderstanding', async () => {
+    const root = await tmp();
+    await put(root, 'a.mp4');
+    await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
+    const r = await scanAssets({ assetsRoot: root, measure: fakeMeasure() });
+    assert.deepEqual(r.needsUnderstanding, []);
+    assert.equal(r.reused.length, 1);
+  });
+});

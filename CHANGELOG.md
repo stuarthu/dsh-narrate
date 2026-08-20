@@ -4,6 +4,16 @@ Newest first. Each entry says what a user would notice.
 
 ## Unreleased
 
+- **It is a real dsh plugin now.** `dsh plugin --profile tui add dsh-narrate` registers six
+  tools the agent can call: start a video, record an answer, hand in a script, index the asset
+  folder, hand in what a clip contains, and ask where things stand.
+- Stop point one works with no model and no network: the four questions are fixed. Stop point
+  two refuses to store a script while a question is unanswered, and that is a check inside the
+  tool rather than a line of instruction.
+- Indexing now reports which clips still need understanding instead of trying to understand
+  them itself, because the host cannot call a model. Durations are still measured on the spot.
+- A clip's duration is always measured, never taken from what the agent claims.
+
 - Indexes your asset folder. It walks it recursively, follows symlinks so clips on an
   external drive are found, and writes one `<clip name>.json` beside each clip.
 - **An existing json of that name is updated, not refused.** Stock footage sites ship
