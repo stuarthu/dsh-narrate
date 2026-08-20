@@ -2,9 +2,11 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 版本 | 2 |
+| 版本 | 3 |
 | 日期 | 2026-08-20 |
 | 依据 | `docs/crew/prd.md` 版本 3、`docs/crew/hld.md` 版本 2 |
+
+**版本 3 改了什么。** 依据 `crd/0001`：新增里程碑 `M4`（挂载）和任务 `T-11`，`T-06` 到 `T-10` 的里程碑顺移，`T-08` 重写（编排者是 agent，不是宿主），`T-10` 缩成只更新 README。
 
 **版本 2 改了什么。** `assetsindex-shotplan.md` 升到版本 4（一个 clip 一个 JSON、`fromYou` 和 `fromMachine` 分节、描述按时间段、人类输入源清单、三层漏斗）。任务跟着重排：`M2` 从 2 个任务变成 3 个，`M4` 从 1 个变成 2 个，后面的编号顺移。`T-01` 已完成，不受影响。
 
@@ -24,17 +26,18 @@
 | `T-03` | M2 | 人类输入源翻译成 `fromYou`。六个读取器：跟插件说、你手改的 `fromYou`、同名 `.narrate.txt`、`clips.csv`、文件名切词、文件夹名。按优先级取 `description`，`tags` 取并集去重，`notes` 原样不解析，`sources` 记来源。**必须可重跑且结果一样** | `src/assets-index/from-you.js`<br>`test/from-you.test.js` | `T-02` | `assetsindex-shotplan.md` | `A-21` `A-22` `A-23` |
 | `T-04` | M2 | 扫素材文件夹，对新的或指纹变过的 clip 调视频理解，把结果切成时间段写进 `fromMachine`，并记下 `visualSearchDir`。理解失败的那一条跳过并记下，**不中断整次入库** | `src/assets-index/scan.js`<br>`test/scan.test.js` | `T-02` `T-03` | `assetsindex-shotplan.md` | `A-1` `A-2` |
 | `T-05` | M3 | 停点 1：拿到想法先提至少 3 个问题，收到回答前不写文稿。停点 2：把想法和回答展开成按句编号的文稿，写进工作文件的 `script` 节 | `src/script/interview.js`<br>`src/script/write.js`<br>`test/script.test.js` | `T-01` | `flow-stages.md` | `A-4` `A-5` |
-| `T-06` | M4 | 三层漏斗挑候选。第 1 层按时长排除盖不住这句的；第 2 层用 `description`、`tags`、`notes` 词重叠留候选；第 3 层把这句翻成一句英文画面描述，交给画面搜索定到第几秒。第 3 层可选：`visualSearchDir` 不存在时**退回前两层，不报错** | `src/shotplan/candidates.js`<br>`test/candidates.test.js` | `T-02` `T-05` | `assetsindex-shotplan.md`（调用侧） | `A-24` `A-25` `A-26`，加调用侧契约测试 |
-| `T-07` | M4 | 分配和成表。用过的素材降权，相邻两句不来回切同两段素材。写出画面对应表；挑不到的句子进缺素材报告；用了 `confidence: low` 的要在报告里说明 | `src/shotplan/assign.js`<br>`test/assign.test.js` | `T-06` | `assetsindex-shotplan.md`<br>`flow-stages.md` | `A-6` `A-7` `A-27` |
-| `T-08` | M5 | 编排：决定下一步跑哪个阶段，在四个停点停住等回答，中途退出后能从原地续跑。跑完确认中间产物齐全 | `src/flow/run.js`<br>`test/flow-run.test.js` | `T-04` `T-05` `T-07` | `flow-stages.md` | `A-5` `A-12` |
-| `T-09` | M5 | 逐句配音循环、把逐句音频拼成一条纯音频给停点 4、分批拼接（单次上限 20 段）、横屏和竖屏两套字幕规则（竖屏字号更大、每行更少字、位置更高） | `src/voice/speak.js`<br>`src/render/concat.js`<br>`src/render/subtitle.js`<br>`test/render-concat.test.js`<br>`test/subtitle.test.js` | `T-01` | `flow-stages.md` | `A-8` `A-9` `A-16` `A-17` `A-18` |
-| `T-10` | M5 | 装成 dsh 插件：挂载入口和 `cordis.patch.yml`，更新英文和中文两份 README。**要把 `dsh.bundle` 字段加回 `package.json`**——`0.1.0` 发布时故意移除了它，因为 `dsh-app-boot` 在读不到 bundle 的 patch 文件时会直接抛错（`dsh-app-boot/lib/index.js:811`），提前声明会让别人的整个 dsh profile 启动不了。这是唯一允许改 `T-01` 文件的一处，理由写在这里 | `host/narrate.js`<br>`cordis.patch.yml`<br>`package.json`（只加 `dsh` 一节）<br>`README.md`<br>`README-zh.md` | `T-08` | 无 | `A-15` |
+| `T-06` | M5 | 三层漏斗挑候选。第 1 层按时长排除盖不住这句的；第 2 层用 `description`、`tags`、`notes` 词重叠留候选；第 3 层把这句翻成一句英文画面描述，交给画面搜索定到第几秒。第 3 层可选：`visualSearchDir` 不存在时**退回前两层，不报错** | `src/shotplan/candidates.js`<br>`test/candidates.test.js` | `T-02` `T-05` | `assetsindex-shotplan.md`（调用侧） | `A-24` `A-25` `A-26`，加调用侧契约测试 |
+| `T-07` | M5 | 分配和成表。用过的素材降权，相邻两句不来回切同两段素材。写出画面对应表；挑不到的句子进缺素材报告；用了 `confidence: low` 的要在报告里说明 | `src/shotplan/assign.js`<br>`test/assign.test.js` | `T-06` | `assetsindex-shotplan.md`<br>`flow-stages.md` | `A-6` `A-7` `A-27` |
+| `T-08` | M6 | **编排的次序说明和守门。** 编排者是 agent，不是宿主（见 `hld.md` 第 4.1 节），所以这一步交付两样东西：一份写给 agent 的次序说明，和每个工具里的**硬前置检查**。每一条"不能跳过"都必须是工具自己会报错，不能只写在说明里。加上续跑：从工作文件读出下一步该干什么 | `src/flow/run.js`<br>`test/flow-run.test.js` | `T-04` `T-05` `T-07` | `flow-stages.md` | `A-5` `A-12` |
+| `T-09` | M6 | 逐句配音循环、把逐句音频拼成一条纯音频给停点 4、分批拼接（单次上限 20 段）、横屏和竖屏两套字幕规则（竖屏字号更大、每行更少字、位置更高） | `src/voice/speak.js`<br>`src/render/concat.js`<br>`src/render/subtitle.js`<br>`test/render-concat.test.js`<br>`test/subtitle.test.js` | `T-01` | `flow-stages.md` | `A-8` `A-9` `A-16` `A-17` `A-18` |
+| `T-10` | M6 | 更新英文和中文两份 README，把整条流程和四个停点写清楚 | `README.md`<br>`README-zh.md` | `T-08` `T-09` | 无 | 无（`A-15` 归 `T-11`） |
+| `T-11` | M4 | **装成 dsh 插件，把三个注入点接成 agent 能调的工具。** 插件入口 `apply(ctx, config)` 加 `ctx.tools.register`，六个工具：开新任务并拿到反问、记一个回答、交文稿、扫素材并拿到"哪些需要理解"、交一段素材的理解结果、看当前状态。**要把 `dsh.bundle` 加回 `package.json`**——`0.1.0` 故意移除过它，因为 `dsh-app-boot` 读不到 bundle 的 patch 文件会直接抛错（`dsh-app-boot/lib/index.js`），提前声明会让别人整个 dsh profile 启动不了。**还要给 `src/assets-index/scan.js` 加一个"只报不做"的模式**（不传 `understand` 时，把需要理解的素材列出来而不是去调）——这是第二处允许改别人任务文件的例外，理由是宿主调不到模型，扫描必须能只报不做 | `host/narrate.js`<br>`cordis.patch.yml`<br>`package.json`（只加 `dsh` 一节）<br>`src/assets-index/scan.js`（只加"只报不做"模式）<br>`test/mount.test.js` | `T-05` | `flow-stages.md`<br>`assetsindex-shotplan.md` | `A-15` `A-28` `A-29` `A-30` |
 
 ## 每个验收检查由哪个任务交付
 
 | 检查 | 任务 | 检查 | 任务 |
 | --- | --- | --- | --- |
-| `A-1` | `T-04` | `A-15` | `T-10` |
+| `A-1` | `T-04` | `A-15` | `T-11` |
 | `A-2` | `T-04` | `A-16` | `T-09` |
 | `A-3` | `T-02` | `A-17` | `T-09` |
 | `A-4` | `T-05` | `A-18` | `T-09` |
@@ -47,18 +50,21 @@
 | `A-11` | `T-01` ✅ | `A-25` | `T-06` |
 | `A-12` | `T-08` | `A-26` | `T-06` |
 | `A-13` | `T-01` ✅ | `A-27` | `T-07` |
-| `A-14` | `T-01` ✅ | | |
+| `A-14` | `T-01` ✅ | `A-28` | `T-11` |
+| | | `A-29` | `T-11` |
+| | | `A-30` | `T-11` |
 
-27 条检查全部有任务交付，没有一条落空。
+30 条检查全部有任务交付，没有一条落空。
 
 ## 跑的顺序
 
 ```
 M1:  T-01 ✅（已完成并提交）
-M2:  T-02 → T-03 → T-04
-M3:  T-05
-M4:  T-06 → T-07
-M5:  T-08 、 T-09（两个可以同时跑，文件不重叠） → T-10
+M2:  T-02 → T-03 → T-04 ✅
+M3:  T-05 ✅
+M4:  T-11          ← 挂载。接上之后你在 dsh 里就能真用
+M5:  T-06 → T-07
+M6:  T-08 、 T-09（两个可以同时跑，文件不重叠） → T-10
 ```
 
 里程碑之间必须停下来等用户回答。就算文件不重叠也不准提前开工——停点的意义就是让用户早点看到方向。
