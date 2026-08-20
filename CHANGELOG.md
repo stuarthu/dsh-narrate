@@ -4,6 +4,21 @@ Newest first. Each entry says what a user would notice.
 
 ## Unreleased
 
+- **A whole video comes out the other end.** Every sentence is spoken, cut, subtitled and
+  joined into one file, at 1920x1080 for landscape or 1080x1920 for portrait.
+- A clip that is shorter than its narration no longer stops the render. If it is short by a
+  fifth or less the picture slows down; more than that and it loops. The narration is never
+  sped up or slowed — that is what makes narration sound fake.
+- Clips of any size and frame rate can be mixed. Each one is fitted into the frame with black
+  bars rather than stretched, and every part is encoded to one shape so joining them does not
+  re-encode and does not lose quality. The finished file is checked by decoding all of it,
+  because a join can break without ffmpeg reporting an error.
+- **Subtitles are now placed where you would expect on a phone.** Sizes and margins used to be
+  handed to ffmpeg as pixels, which libass silently rescaled: in portrait the subtitle landed
+  at the *top* of the frame. Sizes are now ratios of the frame, so a subtitle looks the same
+  at any resolution.
+- The text file handed to the speech engine is deleted once the line is spoken. It is kept when
+  the line fails, since that is when you need to see it.
 - **It is a real dsh plugin now.** `dsh plugin --profile tui add dsh-narrate` registers six
   tools the agent can call: start a video, record an answer, hand in a script, index the asset
   folder, hand in what a clip contains, and ask where things stand.

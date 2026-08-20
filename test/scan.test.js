@@ -396,3 +396,39 @@ describe('T-11 用的：只报不做模式', () => {
     assert.equal(r.reused.length, 1);
   });
 });
+
+describe('T-04↔T-06 接口：扫描交出来的素材，挑素材那一侧要能直接用', () => {
+  test('每段素材是平铺的一条，fromYou / fromMachine / measured 都在最外层', async () => {
+    const root = await tmp();
+    const clip = await put(root, 'a.mp4');
+    await put(root, 'a.mp4.narrate.txt', '一段测试素材\n标签: 测试, 例子\n');
+    const got = await scanAssets({ assetsRoot: root, measure: fakeMeasure() });
+    assert.equal(got.clips.length, 1);
+    const record = got.clips[0];
+    assert.equal(record.clipPath, clip);
+    // 这几个键必须在最外层。以前扫描交的是 { clipPath, record }，挑素材那一侧读的却是
+    // 最外层的 fromMachine，于是每段素材都被当成"还没理解"，一句都配不上画面。
+    // 两边各自的单元测试都用自己手写的假数据，谁也没发现——真跑一遍才现形。
+    for (const key of ['fromYou', 'measured']) {
+      assert.ok(Object.hasOwn(record, key), `最外层缺 ${key}`);
+    }
+    assert.ok(!Object.hasOwn(record, 'record'), '不该再有 record 这层包装');
+  });
+
+  test('拿扫描的结果直接喂给 pickCandidates，能挑出候选来', async () => {
+    const root = await tmp();
+    const clip = await put(root, 'sky.mp4');
+    await put(root, 'sky.mp4.narrate.txt', '蓝天上的白云\n标签: 天空, 云\n');
+    const scanned = await scanAssets({
+      assetsRoot: root,
+      measure: fakeMeasure(),
+      understand: fakeUnderstander({
+        'sky.mp4': { segments: [{ startSec: 0, endSec: 30, description: '蓝天白云慢慢飘', tags: ['天空', '云'], confidence: 'high' }] },
+      }),
+    });
+    const { pickCandidates } = await import('../src/shotplan/candidates.js');
+    const got = await pickCandidates({ sentence: { id: 'S-001', text: '云在天上飘。' }, clips: scanned.clips });
+    assert.ok(got.candidates.length > 0, `该挑出候选，实际被丢掉的理由：${JSON.stringify(got.dropped)}`);
+    assert.equal(got.candidates[0].clipPath, clip);
+  });
+});

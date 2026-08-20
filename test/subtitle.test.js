@@ -7,17 +7,18 @@ import {
   displayWidth,
   wrapSubtitle,
   escapeSubtitle,
-  srtBlock,
-  forceStyle,
+  assDocument,
+  assTime,
+  stylePixels,
 } from '../src/render/subtitle.js';
 
 describe('T-09 字幕：横屏和竖屏两套规则', () => {
-  test('竖屏一行放的字更少，字号更大，位置更高', () => {
+  test('竖屏一行放的字更少，字号（按画面宽算）更大，位置更高', () => {
     const wide = SUBTITLE_RULES.landscape;
     const tall = SUBTITLE_RULES.portrait;
     assert.ok(tall.maxWidth < wide.maxWidth, '竖屏一行该放更少');
-    assert.ok(tall.fontSize > wide.fontSize, '竖屏字号该更大');
-    assert.ok(tall.marginV > wide.marginV, '竖屏字幕该更高，别被手机的操作条压住');
+    assert.ok(tall.fontRatio > wide.fontRatio, '竖屏字号占画面宽的比例该更大');
+    assert.ok(tall.marginRatio > wide.marginRatio, '竖屏字幕该更高，别被手机的操作条压住');
   });
 
   test('宽度按显示宽度算：一个中文字顶两个拉丁字符', () => {
@@ -114,54 +115,102 @@ describe('T-09 字幕：文本是数据，不是指令', () => {
   });
 });
 
-describe('T-09 字幕：生成 SRT', () => {
-  test('时间写法和换行都对', () => {
-    const block = srtBlock(1, 0, 2.48, '很短的一句。', 'landscape');
-    const lines = block.trim().split('\n');
-    assert.equal(lines[0], '1');
-    assert.equal(lines[1], '00:00:00,000 --> 00:00:02,480');
-    assert.equal(lines[2], '很短的一句。');
+describe('T-09 字幕：样式是比例，不是写死的像素', () => {
+  test('同一个比例在两种分辨率下，字幕占画面的份额一样', () => {
+    const big = stylePixels('landscape', 1920, 1080);
+    const small = stylePixels('landscape', 960, 540);
+    assert.ok(Math.abs(big.fontSize / 1920 - small.fontSize / 960) < 0.002,
+      `字号占宽的比例该一致：${big.fontSize}/1920 对 ${small.fontSize}/960`);
+    assert.ok(Math.abs(big.marginV / 1080 - small.marginV / 540) < 0.002,
+      `边距占高的比例该一致：${big.marginV}/1080 对 ${small.marginV}/540`);
   });
 
-  test('长句在 SRT 里就是多行，而且已经转义过', () => {
-    const block = srtBlock(2, 1, 6, '{注}这是一句故意写得比较长的话，好让它必须换行。', 'portrait');
-    const body = block.trim().split('\n').slice(2);
-    assert.ok(body.length >= 2, '该有多行');
-    assert.ok(block.includes('\\{注\\}'), '该转义过');
-  });
-
-  test('超过一小时也写得对', () => {
-    const block = srtBlock(1, 3725.5, 3728, '一句话。', 'landscape');
-    assert.ok(block.includes('01:02:05,500'), block);
-  });
-
-  test('空文本也给出一个合法的块，不产生半个 SRT', () => {
-    const block = srtBlock(1, 0, 1, '', 'landscape');
-    assert.match(block, /^1\n00:00:00,000 --> 00:00:01,000\n\n\n$/);
-  });
-});
-
-describe('T-09 字幕：给 ffmpeg 的样式', () => {
-  test('竖屏的字号和边距都比横屏大', () => {
-    const wide = forceStyle('landscape');
-    const tall = forceStyle('portrait');
-    const size = (s) => Number(/FontSize=(\d+)/.exec(s)[1]);
-    const margin = (s) => Number(/MarginV=(\d+)/.exec(s)[1]);
-    assert.ok(size(tall) > size(wide));
-    assert.ok(margin(tall) > margin(wide));
-  });
-
-  test('样式串里没有会把 ffmpeg 滤镜切断的字符', () => {
+  test('一行满字放得下：maxWidth 个显示宽度乘字号，不超过画面宽减两边留白', () => {
     for (const aspect of ['landscape', 'portrait']) {
-      const style = forceStyle(aspect);
-      assert.ok(!style.includes("'"), `不能有单引号：${style}`);
-      assert.ok(!style.includes(':'), `不能有冒号，那会切断 subtitles 滤镜：${style}`);
+      for (const [w, h] of [[1920, 1080], [1080, 1920], [960, 540], [540, 960]]) {
+        const px = stylePixels(aspect, w, h);
+        const chars = SUBTITLE_RULES[aspect].maxWidth / 2; // 显示宽度 2 算一个中文字
+        assert.ok(chars * px.fontSize <= w - 2 * px.marginH,
+          `${aspect} ${w}x${h}：一行 ${chars} 个字乘 ${px.fontSize} 超过了 ${w - 2 * px.marginH}`);
+      }
     }
   });
 
-  test('描边和阴影都开着，否则亮画面上看不见白字', () => {
-    const style = forceStyle('landscape');
-    assert.match(style, /Outline=[1-9]/);
-    assert.match(style, /BorderStyle=/);
+  test('描边跟着字号走，字大了描边也大', () => {
+    assert.ok(stylePixels('landscape', 1920, 1080).outline
+      > stylePixels('landscape', 480, 270).outline);
+    assert.ok(stylePixels('landscape', 480, 270).outline >= 2, '再小也要有描边');
+  });
+
+  test('竖直边距不会把字幕推出画面', () => {
+    for (const aspect of ['landscape', 'portrait']) {
+      for (const [w, h] of [[1920, 1080], [1080, 1920], [540, 960]]) {
+        const px = stylePixels(aspect, w, h);
+        assert.ok(px.marginV + px.fontSize * 2 < h,
+          `${aspect} ${w}x${h}：边距 ${px.marginV} 加两行字放不下`);
+      }
+    }
+  });
+});
+
+describe('T-09 字幕：生成 ASS', () => {
+  test('时间写法是 ASS 的，精确到百分之一秒', () => {
+    assert.equal(assTime(0), '0:00:00.00');
+    assert.equal(assTime(2.48), '0:00:02.48');
+    assert.equal(assTime(3725.5), '1:02:05.50');
+  });
+
+  test('PlayRes 钉成成片分辨率——这是让像素真的是像素的唯一办法', () => {
+    const doc = assDocument({ cues: [{ startSec: 0, endSec: 2, text: '一句话。' }],
+      aspect: 'portrait', width: 1080, height: 1920 });
+    assert.match(doc, /^PlayResX: 1080$/m);
+    assert.match(doc, /^PlayResY: 1920$/m);
+    assert.match(doc, /^ScaledBorderAndShadow: yes$/m);
+    // WrapStyle 2 是"只在我写的地方换行"。换行是我们按显示宽度算好的，
+    // 不能让 libass 再自己折一次。
+    assert.match(doc, /^WrapStyle: 2$/m);
+  });
+
+  test('一句话是一条 Dialogue，长句在正文里用 \\N 换行', () => {
+    const doc = assDocument({
+      cues: [{ startSec: 0, endSec: 6, text: '前半句在这里说完了，然后后半句才开始慢慢地说下去。' }],
+      aspect: 'portrait', width: 1080, height: 1920,
+    });
+    const events = doc.split('\n').filter((line) => line.startsWith('Dialogue:'));
+    assert.equal(events.length, 1, '一句话只该有一条 Dialogue');
+    assert.ok(events[0].includes('\\N'), `长句该有硬换行：${events[0]}`);
+  });
+
+  test('多句就是多条 Dialogue，时间各自算', () => {
+    const doc = assDocument({
+      cues: [{ startSec: 0, endSec: 2, text: '第一句。' }, { startSec: 2, endSec: 5.5, text: '第二句。' }],
+      aspect: 'landscape', width: 1920, height: 1080,
+    });
+    const events = doc.split('\n').filter((line) => line.startsWith('Dialogue:'));
+    assert.equal(events.length, 2);
+    assert.ok(events[1].includes('0:00:02.00,0:00:05.50'), events[1]);
+  });
+
+  test('花括号在正文里被转义，伪造不出覆盖标签', () => {
+    const doc = assDocument({ cues: [{ startSec: 0, endSec: 2, text: '{\\pos(0,0)}偷偷挪位置' }],
+      aspect: 'landscape', width: 1920, height: 1080 });
+    const event = doc.split('\n').find((line) => line.startsWith('Dialogue:'));
+    assert.ok(event.includes('\\{'), `花括号该转义：${event}`);
+    assert.ok(event.includes('偷偷挪位置'), '被注入的字该作为普通文字留着');
+  });
+
+  test('正文里的换行伪造不出第二条 Dialogue', () => {
+    const nasty = '第一句\nDialogue: 0,0:00:00.00,0:00:09.00,N,,0,0,0,,偷插的一条';
+    const doc = assDocument({ cues: [{ startSec: 0, endSec: 2, text: nasty }],
+      aspect: 'landscape', width: 1920, height: 1080 });
+    const events = doc.split('\n').filter((line) => line.startsWith('Dialogue:'));
+    assert.equal(events.length, 1, `只该有一条，实际 ${events.length}：${JSON.stringify(events)}`);
+    assert.ok(events[0].includes('偷插的一条'), '被注入的字该作为普通文字留着');
+  });
+
+  test('一句都没有时也是一份合法的 ass，不是半个文件', () => {
+    const doc = assDocument({ cues: [], aspect: 'landscape', width: 1920, height: 1080 });
+    assert.match(doc, /^\[Events\]$/m);
+    assert.equal(doc.split('\n').filter((line) => line.startsWith('Dialogue:')).length, 0);
   });
 });

@@ -25,7 +25,7 @@ describe('T-07 A-6：画面对应表每行该有什么', () => {
     assert.equal(got.shots.length, 1);
     const row = got.shots[0];
     assert.equal(row.sentenceId, 'S-001');
-    assert.equal(row.clipPath, '/a.mp4');
+    assert.equal(row.assetPath, '/a.mp4');
     assert.equal(row.startSec, 2);
     assert.equal(row.endSec, 5);
     assert.equal(row.subtitle, '第一句。', '字幕就是这句话本身');
@@ -114,7 +114,7 @@ describe('T-07 分配：用过的降权，相邻不来回切', () => {
       pick('S-001', '一。', [cand('/a.mp4', 9), cand('/b.mp4', 9)]),
       pick('S-002', '二。', [cand('/a.mp4', 9), cand('/b.mp4', 9)]),
     ]));
-    const used = got.shots.map((s) => s.clipPath);
+    const used = got.shots.map((s) => s.assetPath);
     assert.equal(new Set(used).size, 2, `两句该用不同的素材，实际 ${used}`);
   });
 
@@ -123,7 +123,7 @@ describe('T-07 分配：用过的降权，相邻不来回切', () => {
       pick('S-001', '一。', [cand('/good.mp4', 20), cand('/meh.mp4', 1)]),
       pick('S-002', '二。', [cand('/good.mp4', 20), cand('/meh.mp4', 1)]),
     ]));
-    assert.deepEqual(got.shots.map((s) => s.clipPath), ['/good.mp4', '/good.mp4'],
+    assert.deepEqual(got.shots.map((s) => s.assetPath), ['/good.mp4', '/good.mp4'],
       '差 19 分的时候，降权不该让它去用那段几乎不相关的');
   });
 
@@ -135,7 +135,7 @@ describe('T-07 分配：用过的降权，相邻不来回切', () => {
       pick('S-003', '三。', [cand('/a.mp4', 9), cand('/b.mp4', 9), cand('/c.mp4', 9)]),
     ];
     const got = assignShots(inputs(three));
-    const used = got.shots.map((s) => s.clipPath);
+    const used = got.shots.map((s) => s.assetPath);
     assert.notEqual(used[0], used[1], '相邻两句不该同一段');
     assert.notEqual(used[1], used[2], '相邻两句不该同一段');
     assert.notEqual(used[0], used[2], '有第三段可用时，不该 a b a 地闪');
@@ -146,7 +146,7 @@ describe('T-07 分配：用过的降权，相邻不来回切', () => {
       pick('S-001', '一。', [cand('/only.mp4', 9)]),
       pick('S-002', '二。', [cand('/only.mp4', 9)]),
     ]));
-    assert.deepEqual(got.shots.map((s) => s.clipPath), ['/only.mp4', '/only.mp4']);
+    assert.deepEqual(got.shots.map((s) => s.assetPath), ['/only.mp4', '/only.mp4']);
     assert.equal(got.missing.length, 0);
     const note = got.notes.find((n) => n.message.includes('同一段'));
     assert.ok(note, '一直用同一段该提醒一句，让用户知道成片会单调');
@@ -195,7 +195,7 @@ describe('T-07 真实素材教的两件事', () => {
       pick('S-001', '先看海。', [cand('/ocean.mp4', 9), cand('/random.mp4', 4.7)]),
       pick('S-002', '再去看看海。', [cand('/ocean.mp4', 9), cand('/random.mp4', 4.7)]),
     ]));
-    assert.deepEqual(got.shots.map((s) => s.clipPath), ['/ocean.mp4', '/ocean.mp4'],
+    assert.deepEqual(got.shots.map((s) => s.assetPath), ['/ocean.mp4', '/ocean.mp4'],
       '宁可重复用对的那段，也不能配一段不相关的');
   });
 
@@ -204,7 +204,7 @@ describe('T-07 真实素材教的两件事', () => {
       pick('S-001', '一。', [cand('/a.mp4', 9), cand('/b.mp4', 8.5)]),
       pick('S-002', '二。', [cand('/a.mp4', 9), cand('/b.mp4', 8.5)]),
     ]));
-    assert.equal(new Set(got.shots.map((s) => s.clipPath)).size, 2,
+    assert.equal(new Set(got.shots.map((s) => s.assetPath)).size, 2,
       '8.5 和 9 差不多相关，该换一段');
   });
 
@@ -277,5 +277,22 @@ describe('T-07 缺素材的理由要分清「太短」和「不相关」', () =>
   test('理由里带上这句话大概多少秒，用户才知道要改多短', () => {
     const got = assignShots(inputs([pickWithDropped('S-001', '一句很长的话。', [], 3, 6.3)]));
     assert.ok(got.missing[0].reason.includes('6.3 秒'), got.missing[0].reason);
+  });
+});
+
+describe('T-07↔T-01 接口：画面对应表的字段名要照契约', () => {
+  test('每一条用 assetPath，不是 clipPath', () => {
+    // 契约 flow-stages.md 写的是 assetPath，渲染那一侧读的也是 assetPath。
+    // 这里以前叫 clipPath——挑素材那一侧内部的叫法，写进工作文件就不对了。
+    // 两边的单元测试各用自己手写的假数据，谁都没碰到；真跑一遍才现形。
+    const got = assignShots({
+      sentences: [{ id: 'S-001', text: '云在天上飘。' }],
+      candidates: [{ sentenceId: 'S-001', candidates: [
+        { clipPath: '/a/sky.mp4', startSec: 0, endSec: 4, score: 9, confidence: 'high', why: '重叠' },
+      ] }],
+    });
+    assert.equal(got.shots.length, 1);
+    assert.equal(got.shots[0].assetPath, '/a/sky.mp4');
+    assert.ok(!Object.hasOwn(got.shots[0], 'clipPath'), '不该再出现 clipPath 这个名字');
   });
 });

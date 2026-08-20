@@ -202,7 +202,7 @@ const probe = async (path, entry) => {
  */
 async function bottomBrightness(path) {
   const res = await run(FFMPEG, ['-hide_banner', '-nostats', '-loglevel', 'info', '-i', path,
-    '-vf', 'crop=640:180:0:180,signalstats,metadata=print:key=lavfi.signalstats.YAVG',
+    '-vf', 'crop=iw:ih/2:0:ih/2,signalstats,metadata=print:key=lavfi.signalstats.YAVG',
     '-f', 'null', '/dev/null'], { maxBuffer: 1 << 24 }).catch((e) => e);
   const match = `${res.stdout ?? ''}${res.stderr ?? ''}`.match(/YAVG=([0-9.]+)/);
   assert.ok(match, '读不到 YAVG');
@@ -293,17 +293,31 @@ describe('渲染一段：画面时长服从音频', () => {
       (e) => e.code === 'E_ASSET_MISSING');
   });
 
-  test('素材从起点开始不够长时报 E_ASSET_TOO_SHORT', async () => {
+  test('素材从起点开始一点画面都不剩时报 E_ASSET_TOO_SHORT', async () => {
     const dir = await tmp();
     const asset = join(dir, 'asset.mp4');
     const audio = join(dir, 'a.wav');
     await makeBlackAsset(asset, 3);
     await makeTone(audio, 2);
-    // 素材 3 秒，从第 2 秒起只剩 1 秒，盖不住 2 秒旁白
-    await stubJob(dir, { assetPath: asset, audioPath: audio, durationSec: 2.0, startSec: 2 });
+    // 素材 3 秒，起点写在第 5 秒——那里没有画面，补长也补不出来
+    await stubJob(dir, { assetPath: asset, audioPath: audio, durationSec: 2.0, startSec: 5 });
     await assert.rejects(
       () => renderSegment({ jobDir: dir, sentenceId: 'S-001', outPath: join(dir, 'o.mp4') }),
       (e) => e.code === 'E_ASSET_TOO_SHORT');
+  });
+
+  test('素材比旁白短但还有画面时按 Q-6 补长，不报错', async () => {
+    // 这条以前是 E_ASSET_TOO_SHORT。`Q-6` 定了补长规则之后，够不着旁白不再是错误：
+    // 缺一点就放慢，缺很多就循环。真正的错误只剩「那个起点后面根本没有画面」。
+    const dir = await tmp();
+    const asset = join(dir, 'asset.mp4');
+    const audio = join(dir, 'a.wav');
+    await makeBlackAsset(asset, 3);
+    await makeTone(audio, 2);
+    await stubJob(dir, { assetPath: asset, audioPath: audio, durationSec: 2.0, startSec: 2 });
+    const got = await renderSegment({ jobDir: dir, sentenceId: 'S-001', outPath: join(dir, 'o.mp4') });
+    assert.equal(got.fill, 'loop', `缺一半该循环，实际 ${got.fill}`);
+    assert.ok(Math.abs(got.durationSec - 2.0) < 0.15, `时长该补齐到 2 秒，实际 ${got.durationSec}`);
   });
 });
 
@@ -323,6 +337,24 @@ async function ttsReachable() {
   }
 }
 
+/**
+ * 一句话配音失败，是网络断了还是代码坏了。
+ *
+ * 上面的 `ttsReachable()` 只在开跑前探一次；网可能在调用当中断掉——实测过一次：探测
+ * 通过，配音报 `AggregateError`（Node 连不上时抛的就是这个），而紧接着的下一条测试
+ * 又成功出了片。所以连接类的错误要出声地跳过，**别的错误照旧算失败**：红灯必须意味着
+ * 我们的代码错了。
+ */
+const NETWORK_TROUBLE = /AggregateError|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|fetch failed|socket hang up/i;
+
+function skipIfNetwork(t, error, what) {
+  if (error?.code === 'E_ENGINE_FAILED' && NETWORK_TROUBLE.test(String(error.message))) {
+    t.skip(`跳过：${what}的时候网络断了（${String(error.message).slice(0, 120)}）。这不是代码的问题`);
+    return true;
+  }
+  return false;
+}
+
 describe('自带默认引擎（要联网）', () => {
   test('契约测试：给一个文本文件和输出路径，退出 0 并写出能读时长的音频', async (t) => {
     if (!(await ttsReachable())) {
@@ -331,9 +363,15 @@ describe('自带默认引擎（要联网）', () => {
     }
     const dir = await tmp();
     const out = join(dir, 'audio', 'S-001.mp3');
-    const result = await synthesize({
-      text: '你好，这是一句测试。', outPath: out, lang: 'zh', config: defaultEngineConfig(),
-    });
+    let result;
+    try {
+      result = await synthesize({
+        text: '你好，这是一句测试。', outPath: out, lang: 'zh', config: defaultEngineConfig(),
+      });
+    } catch (error) {
+      if (skipIfNetwork(t, error, '配音')) return;
+      throw error;
+    }
     assert.equal(result.audioPath, join(dir, 'audio', 'S-001.wav'), 'audioPath 必须是 .wav');
     assert.ok(result.durationSec > 0.5, `念一句话应超过 0.5 秒，实际 ${result.durationSec}`);
     assert.ok(result.durationSec < 10, `念一句话不该超过 10 秒，实际 ${result.durationSec}`);
@@ -349,7 +387,13 @@ describe('自带默认引擎（要联网）', () => {
 
     // 1. 真的配音
     const audio = join(dir, 'audio', 'S-001.mp3');
-    const spoken = await synthesize({ text: sentence, outPath: audio, lang: 'zh', config: defaultEngineConfig() });
+    let spoken;
+    try {
+      spoken = await synthesize({ text: sentence, outPath: audio, lang: 'zh', config: defaultEngineConfig() });
+    } catch (error) {
+      if (skipIfNetwork(t, error, '端到端走通的配音那一步')) return;
+      throw error;
+    }
 
     // 2. 一段够长的素材
     const asset = join(dir, 'asset.mp4');
@@ -514,22 +558,54 @@ describe('安全评审补的测试：字幕文本是数据，不是指令', () =
       `带花括号(${braced})的墨量应多于不带的(${plain})。一样就说明那几个字被吃掉了`);
   });
 
-  test('文稿里的空行不能伪造出第二条字幕', async () => {
+  test('文稿里的换行和空行不能伪造出第二条字幕', async () => {
     const dir = await tmp();
     const asset = join(dir, 'asset.mp4');
     const audio = join(dir, 'a.wav');
     await makeBlackAsset(asset, 6);
     await makeTone(audio, 2);
-    const nasty = '第一句\n\n2\n00:00:00,000 --> 00:00:02,000\n偷偷插进来的第二句';
+    // 两种伪造都试：ASS 自己的事件行，和旧 SRT 那一套。
+    const nasty = '第一句\n\nDialogue: 0,0:00:00.00,0:00:09.00,N,,0,0,0,,偷偷插进来的第二句';
     await stubJob(dir, { assetPath: asset, audioPath: audio, durationSec: 2.0, subtitle: nasty });
     const out = join(dir, 'inject.mp4');
     await renderSegment({ jobDir: dir, sentenceId: 'S-001', outPath: out });
-    const srt = await readFile(join(dir, 'inject.mp4.srt'), 'utf8');
-    // SRT 里一条字幕是一个"空行隔开的块"。数块，不能数 -->：
-    // 被注入的文字本身就含 --> 这个字符串，它现在只是普通字幕文字，正确地显示出来了。
-    const blocks = srt.split(/\n\s*\n/).filter((b) => b.trim() !== '');
-    assert.equal(blocks.length, 1,
-      `SRT 里只应有一个字幕块，实际 ${blocks.length} 个。多于 1 个就是被注入了。文件内容：\n${srt}`);
-    assert.ok(srt.includes('偷偷插进来的第二句'), '被注入的文字应该作为普通字幕文字显示出来，不是消失');
+    const ass = await readFile(join(dir, 'inject.mp4.ass'), 'utf8');
+    // ASS 里一条字幕是一行 Dialogue。数行，不能数 --> 之类的东西：
+    // 被注入的文字现在只是普通字幕文字，正确地显示出来了。
+    const events = ass.split('\n').filter((line) => line.startsWith('Dialogue:'));
+    assert.equal(events.length, 1,
+      `只应有一条 Dialogue，实际 ${events.length} 条。多于 1 条就是被注入了。文件内容：\n${ass}`);
+    assert.ok(ass.includes('偷偷插进来的第二句'), '被注入的文字应该作为普通字幕文字显示出来，不是消失');
+  });
+});
+
+describe('语音引擎：交给引擎的文字文件', () => {
+  test('配成功之后文字文件被删掉，音频目录里每句只剩一个音频', async () => {
+    const dir = await tmp();
+    const src = join(dir, 'tone.wav');
+    await makeTone(src, 2);
+    const script = join(dir, 'engine.mjs');
+    await writeFile(script, `import { copyFileSync } from 'node:fs';\n`
+      + `copyFileSync(${JSON.stringify(src)}, process.argv[3]);\n`, 'utf8');
+    const out = join(dir, 'audio', 'S-001.wav');
+    const got = await synthesize({ text: '一句话。', outPath: out, lang: 'zh',
+      config: { command: [process.execPath, script, '%TEXT_FILE%', '%OUT_FILE%'] } });
+    assert.equal(got.audioPath, out);
+    const files = await readdir(join(dir, 'audio'));
+    assert.deepEqual(files.sort(), ['S-001.wav'],
+      `音频目录里该只剩一个音频文件，实际 ${JSON.stringify(files)}`);
+  });
+
+  test('配失败时文字文件留着——那时候它是查错要看的东西', async () => {
+    const dir = await tmp();
+    const script = join(dir, 'bad.mjs');
+    await writeFile(script, 'process.exit(3);\n', 'utf8');
+    const out = join(dir, 'audio', 'S-001.wav');
+    await assert.rejects(
+      () => synthesize({ text: '一句话。', outPath: out, lang: 'zh',
+        config: { command: [process.execPath, script, '%TEXT_FILE%', '%OUT_FILE%'] } }),
+      (e) => e.code === 'E_ENGINE_FAILED');
+    const kept = await readFile(`${out}.txt`, 'utf8');
+    assert.equal(kept, '一句话。');
   });
 });

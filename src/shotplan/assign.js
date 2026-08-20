@@ -125,7 +125,9 @@ export function assignShots({
 
     shots.push({
       sentenceId: sentence.id,
-      clipPath: chosen.clipPath,
+      // 契约里叫 assetPath（见 flow-stages.md）。挑素材那一侧内部叫 clipPath，
+      // 写进工作文件时要换成契约的名字——渲染那一侧读的就是 assetPath。
+      assetPath: chosen.clipPath,
       startSec: chosen.startSec,
       endSec: chosen.endSec,
       subtitle: sentence.text,
@@ -156,7 +158,7 @@ export function assignShots({
     .map(([clipPath, count]) => ({
       clipPath,
       count,
-      sentenceIds: shots.filter((s) => s.clipPath === clipPath).map((s) => s.sentenceId),
+      sentenceIds: shots.filter((s) => s.assetPath === clipPath).map((s) => s.sentenceId),
     }))
     .sort((a, b) => b.count - a.count || basename(a.clipPath).localeCompare(basename(b.clipPath)));
 

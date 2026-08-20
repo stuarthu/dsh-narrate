@@ -157,5 +157,10 @@ export async function synthesize({ text, outPath, lang, voice, config }) {
   const durationSec = await probeDuration(trimmed);
   await rename(trimmed, finalPath);
 
+  // 成功了就把交给引擎的文字文件删掉：它只是临时输入，留着等于把旁白文字在磁盘上
+  // 又存了一份，而且会让"每句一个音频文件"变成每句两个文件。
+  // **失败时故意不删**——那时候它是查错要看的东西。
+  await unlink(textFile).catch(() => {});
+
   return { audioPath: finalPath, durationSec };
 }

@@ -231,7 +231,7 @@ export async function scanAssets({ assetsRoot, understand, measure = measureClip
 
       if (!needsMachineRefresh(existing, fingerprint)) {
         reused.push(clipPath);
-        clips.push({ clipPath, record: existing });
+        clips.push({ clipPath, ...existing });
         onEvent?.({ kind: 'reused', clipPath });
         continue;
       }
@@ -239,7 +239,7 @@ export async function scanAssets({ assetsRoot, understand, measure = measureClip
       // 只报不做：把需要理解的列出来，交给能调模型的那一侧。
       if (!understand) {
         needsUnderstanding.push(clipPath);
-        clips.push({ clipPath, record: existing });
+        clips.push({ clipPath, ...existing });
         onEvent?.({ kind: 'needs-understanding', clipPath });
         continue;
       }
@@ -258,7 +258,7 @@ export async function scanAssets({ assetsRoot, understand, measure = measureClip
         fromMachine: normalizeMachine(raw, clipPath, existing.measured.durationSec),
       });
       understood.push(clipPath);
-      clips.push({ clipPath, record });
+      clips.push({ clipPath, ...record });
       onEvent?.({ kind: 'understood', clipPath });
     } catch (error) {
       // 没有错误码说明是意外错误（程序 bug）。绝不能贴成 E_UNDERSTAND_FAILED，

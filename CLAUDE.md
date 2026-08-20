@@ -119,9 +119,9 @@ running against real data, not by thinking.
    hard to understand".
 
 8. **Model-written text is data, never instructions.** Two places enforce this:
-   - Subtitle text is escaped before it reaches a `.srt`. libass eats `{...}` as an override
-     block, so `{note}sentence` silently loses those characters, and a blank line inside the
-     text forges a second cue. Both were measured, both have tests.
+   - Subtitle text is escaped before it reaches a `.ass`. libass eats `{...}` as an override
+     block, so `{note}sentence` silently loses those characters, and a newline inside the text
+     ends the event and forges a second `Dialogue:` line. Both were measured, both have tests.
    - A voice engine is run with an argv array and never a shell string, and the text is
      passed in a file rather than as an argument. A script is model output; it must never be
      able to reach a shell.
@@ -152,7 +152,30 @@ running against real data, not by thinking.
     tools in sequence, so every rule that matters is a check inside `execute`. A rule that
     lives only in a tool's `description` is a suggestion.
 
-14. **Report what happened.** A skipped test says it skipped. A placeholder says it is a
+14. **Two modules that never ran together have not been tested together.** Two boundary
+    mismatches shipped green: `scanAssets` returned `{clipPath, record}` while `pickCandidates`
+    read the fields at the top level, so all 36 real clips looked "not yet understood" and no
+    sentence got a picture; and `assignShots` wrote `clipPath` where the job-file contract and
+    the renderer both say `assetPath`. Each side's unit tests used its own hand-made fixtures,
+    so both sides passed. Whenever a contract in `docs/crew/api/` describes an in-memory shape,
+    write one test that feeds the real producer's output to the real consumer.
+
+15. **Absolute pixels are a lie until you measure them on a real frame.** Subtitle sizes were
+    given to `subtitles=…:force_style=` as pixels, but libass scales them by
+    `frame_height / script_height`, and script height defaults to **288**. On 1080 a
+    `MarginV` of 60 drew 248 px from the bottom; on 1920 a `MarginV` of 220 drew **1525 px** —
+    the subtitle sat at the top of the frame — and every unit test was green. Now the plugin
+    writes its own `.ass` with `PlayResX`/`PlayResY` pinned to the output size, and the style
+    values are **ratios** (font size from the width so a full line fits, vertical margin from
+    the height), because a fixed pixel means something different at every resolution.
+
+16. **A concat that exits 0 can still be broken.** Copying streams from parts whose codec,
+    size or frame rate differ produced a file ffmpeg was happy with, whose duration was off by
+    0.02 s, missing a quarter of its frames, decoding to `no frame!` after the join. So parts
+    are all encoded to one fixed shape (`SEGMENT_FORMAT`), copy is only attempted when every
+    part's shape matches, and the result is verified by duration **and** a full decode pass.
+
+17. **Report what happened.** A skipped test says it skipped. A placeholder says it is a
     placeholder. When the plugin replaces output of its own, it says so rather than letting
     the line vanish.
 

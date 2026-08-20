@@ -2,7 +2,8 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 版本 | 6 |
+| 版本 | 7 |
+| 版本 7 改了什么 | `render` 节写全了：多了 `durationSec`、`width`、`height`、每段的 `fill`、`skippedSentences`、`failures`。`shotplan.shots[]` 的素材路径字段名**确定是 `assetPath`**（挑素材那一侧内部叫 `clipPath`，写进这个文件时要换名）。字幕从 `.srt` 加 `force_style` 换成自己写的 `.ass`，因为 `force_style` 里的像素不是像素（见下）。补上 `E_NOTHING_TO_CONCAT`、`E_SEGMENT_MISSING`、`E_CONCAT_MISMATCH`、`E_NOTHING_TO_RENDER`、`E_RENDER_INTERNAL`。`E_ASSET_TOO_SHORT` 的含义**改了**：素材比旁白短不再是错误（按 `Q-6` 补长），只有"那个起点后面根本没有画面"才报。**这一条是破坏性改动** |
 | 版本 6 改了什么 | `voice.clips` 每条多一个 `text`：配这一句的时候文稿上写的是什么。有了它才能看出句子改没改——改了就重配那一句，没改就复用，配音要花钱不能白花。补上 `E_SPEAK_INTERNAL`、`E_NOTHING_TO_PLAY`、`E_CONCAT_FAILED`。**加法改动** |
 | 版本 5 改了什么 | `meta` 多一个 `approvedStops`：用户在哪几个停点点过头。**停点 1 不在里面**——它的点头就是回答问题本身，没有额外的确认动作；停点 2、3、4 各要一次明确的"继续"。补上 `E_OUT_OF_ORDER`、`E_STOP_NOT_REACHED`、`E_NO_SUCH_STOP`、`E_NO_SUCH_STEP` 四个错误名。**加法改动** |
 | 版本 4 改了什么 | 补上写文稿那一步的五个错误名：`E_EMPTY_ANSWER`、`E_NO_SUCH_QUESTION`、`E_INTERVIEW_INCOMPLETE`、`E_COMPOSE_FAILED`、`E_SCRIPT_UNUSABLE`。**加法改动** |
@@ -52,8 +53,10 @@ JSON，UTF-8，缩进 2 空格。所有时间单位是**秒**，浮点数，保�
     "clips": [ { "sentenceId": "S-001", "text": "Rust 快，不是因为它新。", "audioPath": "/…/audio/S-001.wav", "durationSec": 2.480 } ]
   },
   "render": {
-    "segments": [ { "sentenceId": "S-001", "path": "/…/seg/S-001.mp4", "durationSec": 2.480 } ],
-    "output": "/…/out/final.mp4"
+    "segments": [ { "sentenceId": "S-001", "path": "/…/seg/S-001.mp4", "durationSec": 2.480, "fill": "none" } ],
+    "output": "/…/out/final.mp4",
+    "durationSec": 6.723, "width": 1920, "height": 1080,
+    "skippedSentences": [], "failures": []
   }
 }
 ```
@@ -130,6 +133,48 @@ JSON，UTF-8，缩进 2 空格。所有时间单位是**秒**，浮点数，保�
 | `E_NOTHING_TO_PLAY` | 一句配音都还没有，拼不出停点 4 要的纯音频 |
 | `E_CONCAT_FAILED` | 拼接失败 |
 | `E_RENDER_OUTPUT_UNREADABLE` | 渲染跑完了，但输出文件读不出时长 |
+| `E_ASSET_TOO_SHORT` | `startSec` 后面根本没有画面。**素材比旁白短不算错**——按 `Q-6` 补长 |
+| `E_NOTHING_TO_CONCAT` | 没有任何片段可拼 |
+| `E_SEGMENT_MISSING` | 要拼的片段文件不见了 |
+| `E_CONCAT_MISMATCH` | 拼出来的片子时长不对，或者解码有坏帧。拷流和重编都试过了 |
+| `E_NOTHING_TO_RENDER` | 一句都没渲染出来（全都缺画面、缺配音，或者渲染出错） |
+| `E_RENDER_INTERNAL` | 渲染某一句时出了没有错误码的意外错误。和 `E_SPEAK_INTERNAL` 一个道理：不能让 bug 伪装成"这一句难渲染" |
+
+## 画面比旁白短怎么办（`Q-6`）
+
+画面时长服从音频（`adr/0005`），所以素材盖不住旁白时**不能改语速**，只能动画面：
+
+| 缺口 | 做法 | 为什么 |
+| --- | --- | --- |
+| ≤ 20% | 放慢画面（`setpts`） | 慢一点看不出来，比跳一下自然 |
+| > 20% | 从这一段的起点循环重放 | 放慢到 1.25 倍以上就明显不自然了 |
+| 起点后面没有画面 | 报 `E_ASSET_TOO_SHORT` | 补不出来 |
+
+放慢只动画面，**旁白一秒都不动**——旁白是基准。
+
+## 字幕为什么写 `.ass` 而不是 `.srt`
+
+原来用 `subtitles=x.srt:force_style='FontSize=…,MarginV=…'`，那些数字写的是像素，但 libass
+会按 `画面高 / 脚本高` 缩放它们，而脚本高在没写的时候默认是 **288**。实测：
+
+| 目标 | 想要 | 实际画出来 |
+| --- | --- | --- |
+| 1920x1080 | 离底 60px | 离底 248px |
+| 1080x1920 | 离底 220px | 离底 **1525px**——字幕在画面顶部 |
+
+而当时每个单元测试都是绿的。改法是自己写一份 `.ass`，把 `PlayResX/PlayResY` 钉成成片
+分辨率，数字才真的是像素。样式值本身也从写死的像素改成**比例**：字号按画面宽算（一行
+满字要放得下），竖直边距按画面高算——绝对像素在不同分辨率下含义不一样。
+
+## 拼接：一次过，先比参数
+
+`concat` 分离器读的是清单文件，**没有段数上限**（`dsh-ffmpeg` 那个 `concat` 工具的 20
+段上限不适用）。每一段都按同一套参数出（分辨率、30fps、`high` 档、44100/双声道），
+所以能直接 `-c copy`，不重编、不掉画质。
+
+参数不一致时**不试拷流**，直接重编。实测过：h264/320x180/30fps 和 mpeg4/640x360/10fps
+拷流拼起来，ffmpeg **退出码是 0**、时长只差 0.02 秒，但帧数少了四分之一，后半段解码
+全是 `no frame!`。所以验收要两道：量总时长，**再把成片完整解码一遍**。
 
 ## 好不好用
 

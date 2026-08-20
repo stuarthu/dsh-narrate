@@ -43,7 +43,7 @@ const run = (list, extra = {}) => assignShots({
 console.log('用例 1：对应表每行该有什么');
 check('有句子编号、素材、起秒、止秒、字幕文本', () => {
   const row = run([one('S-001', '第一句。', [c('/a.mp4', 5)])]).shots[0];
-  for (const key of ['sentenceId', 'clipPath', 'startSec', 'endSec', 'subtitle']) {
+  for (const key of ['sentenceId', 'assetPath', 'startSec', 'endSec', 'subtitle']) {
     assert.ok(row[key] !== undefined, `少了 ${key}`);
   }
   assert.equal(row.subtitle, '第一句。');
@@ -114,19 +114,19 @@ check('同分的两段，两句话分到不同的那段', () => {
     one('S-001', '一。', [c('/a.mp4', 9), c('/b.mp4', 9)]),
     one('S-002', '二。', [c('/a.mp4', 9), c('/b.mp4', 9)]),
   ]);
-  assert.equal(new Set(got.shots.map((s) => s.clipPath)).size, 2);
+  assert.equal(new Set(got.shots.map((s) => s.assetPath)).size, 2);
 });
 check('9 分和 4.7 分之间，两句都用 9 分那段', () => {
   const got = run([
     one('S-001', '一。', [c('/ocean.mp4', 9), c('/random.mp4', 4.7)]),
     one('S-002', '二。', [c('/ocean.mp4', 9), c('/random.mp4', 4.7)]),
   ]);
-  assert.deepEqual(got.shots.map((s) => s.clipPath), ['/ocean.mp4', '/ocean.mp4']);
+  assert.deepEqual(got.shots.map((s) => s.assetPath), ['/ocean.mp4', '/ocean.mp4']);
 });
 check('三句三段，相邻不同段，也不 a b a 地闪', () => {
   const all = [c('/a.mp4', 9), c('/b.mp4', 9), c('/c.mp4', 9)];
   const got = run([one('S-001', '一。', all), one('S-002', '二。', all), one('S-003', '三。', all)]);
-  const used = got.shots.map((s) => s.clipPath);
+  const used = got.shots.map((s) => s.assetPath);
   assert.equal(new Set(used).size, 3, `该三段各用一次，实际 ${used}`);
 });
 
