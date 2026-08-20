@@ -191,12 +191,20 @@ const probe = async (path, entry) => {
   return stdout.trim();
 };
 
-/** 量底部 25% 的平均亮度。纯黑是 16，画了字就会高于 16。 */
+/**
+ * 量底部**一半**的平均亮度。纯黑是 16，画了字就会高于 16。
+ *
+ * 原来量的是底部 90 像素，那和字幕样式的 MarginV 绑死了：T-09 把字幕样式接上之后，
+ * 字幕上移，笔画少的那句整个跑出了测量窗口，量出来 16.000——看着像"没画字"，
+ * 其实只是量错了地方。量底部一半，样式怎么调都还在里面。
+ *
+ * 实测（640x360 纯黑底）：无字幕 16.000，笔画少 17.349，笔画多 21.134。
+ */
 async function bottomBrightness(path) {
-  const { stderr } = await run(FFMPEG, ['-hide_banner', '-nostats', '-loglevel', 'info', '-i', path,
-    '-vf', 'crop=640:90:0:270,signalstats,metadata=print:key=lavfi.signalstats.YAVG',
-    '-f', 'null', '/dev/null']).catch((e) => e);
-  const match = String(stderr).match(/YAVG=([0-9.]+)/);
+  const res = await run(FFMPEG, ['-hide_banner', '-nostats', '-loglevel', 'info', '-i', path,
+    '-vf', 'crop=640:180:0:180,signalstats,metadata=print:key=lavfi.signalstats.YAVG',
+    '-f', 'null', '/dev/null'], { maxBuffer: 1 << 24 }).catch((e) => e);
+  const match = `${res.stdout ?? ''}${res.stderr ?? ''}`.match(/YAVG=([0-9.]+)/);
   assert.ok(match, '读不到 YAVG');
   return Number(match[1]);
 }

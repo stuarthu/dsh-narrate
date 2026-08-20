@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { openJob } from '../flow/job.js';
+import { escapeSubtitle, forceStyle, srtTime } from './subtitle.js';
 
 const run = promisify(execFile);
 
@@ -49,38 +50,6 @@ async function mustExist(path, code, what) {
   }
 }
 
-/** 秒变成 SRT 的时间写法，例如 2.48 变成 00:00:02,480。 */
-function srtTime(seconds) {
-  const ms = Math.round(seconds * 1000);
-  const h = String(Math.floor(ms / 3600000)).padStart(2, '0');
-  const m = String(Math.floor((ms % 3600000) / 60000)).padStart(2, '0');
-  const s = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
-  const rest = String(ms % 1000).padStart(3, '0');
-  return `${h}:${m}:${s},${rest}`;
-}
-
-/**
- * 把一句字幕整理成能安全放进 SRT 的样子。
- *
- * 字幕内容是模型生成的文稿，不是程序选过的字。实测两件事会出问题：
- *   1. libass 把 `{...}` 当覆盖标签，整段被吃掉。`{备注}一句话` 和 `一句话`
- *      渲染出来一模一样，用户的字无声消失。
- *   2. 文本里的空行会结束当前这条字幕，后面的内容能伪造成第二条字幕。
- *      实测真的会多渲染一条。
- * 所以花括号和反斜杠要转义，空行要去掉。单个换行留着，T-07 换行要用。
- */
-function escapeSubtitle(text) {
-  return String(text ?? '')
-    .replace(/\r\n?/g, '\n')
-    .replace(/\\/g, '\\\\')
-    .replace(/\{/g, '\\{')
-    .replace(/\}/g, '\\}')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
-    .join('\n');
-}
-
 /**
  * 渲染一句话的片段：裁素材、混进旁白、烧上这一句字幕。
  *
@@ -91,6 +60,8 @@ export async function renderSegment({ jobDir, sentenceId, outPath: rawOutPath })
   // 所以这里必须先把每个路径变成绝对路径，否则换了工作目录之后相对路径就指到别处了。
   const outPath = resolve(rawOutPath);
   const job = await openJob(jobDir, 'render');
+  // 横屏和竖屏两套字幕样式，规则在 subtitle.js 里
+  const aspect = job.data.meta?.aspect ?? 'landscape';
   const shotplan = job.require('shotplan');
   const voice = job.require('voice');
 
@@ -155,7 +126,10 @@ export async function renderSegment({ jobDir, sentenceId, outPath: rawOutPath })
       '-hide_banner', '-loglevel', 'error', '-y',
       '-ss', String(startSec), '-t', String(clip.durationSec), '-i', assetPath,
       '-i', audioPath,
-      '-vf', `subtitles=${srtName}`,
+      // force_style 的值里有逗号，而逗号也是滤镜的分隔符，所以要用单引号裹住。
+      // 参数是逐项传给进程的，不经过 shell，所以这里的单引号是给 ffmpeg 的滤镜
+      // 解析器看的，不是 shell 的引号。
+      '-vf', `subtitles=${srtName}:force_style='${forceStyle(aspect)}'`,
       '-map', '0:v:0', '-map', '1:a:0',
       '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac',
       '-shortest', outPath,
