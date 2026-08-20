@@ -1,10 +1,10 @@
-[中文](README-zh.md)
-
 # dsh-narrate
+
+English | [中文](README-zh.md)
 
 Version 0.1.0
 
-A [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/DeepSeek-Harness) plugin.
+A [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness) plugin.
 You give it one idea. It stops four times to ask you first. Then it builds a video
 from the clips in your own `assets` folder, with an AI voice reading your script
 and the words burned onto the picture.

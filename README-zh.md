@@ -1,10 +1,10 @@
-[English](README.md)
-
 # dsh-narrate
+
+[English](README.md) | 中文
 
 版本 0.1.0
 
-一个 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/DeepSeek-Harness) 插件。
+一个 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 插件。
 
 你给它一句想法。它会在四个地方停下来先问你。然后用你自己 `assets` 文件夹里的素材，
 出一条带 AI 旁白和硬字幕的视频。
