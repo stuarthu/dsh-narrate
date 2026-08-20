@@ -24,7 +24,7 @@
 | `T-05` | M4 | 为每句挑一段素材，写出画面对应表。挑不到的句子进缺素材报告。`confidence` 是 `low` 的素材只在没有 `high` 可用时才用，用了要在报告里说明 | `src/shotplan/plan.js`<br>`test/shotplan.test.js` | `T-02` `T-04` | `assetsindex-shotplan.md`（调用侧）<br>`flow-stages.md` | `A-6` `A-7`，加调用侧契约测试 |
 | `T-06` | M5 | 编排：决定下一步跑哪个阶段，在四个停点停住等回答，中途退出后能从原地续跑。跑完确认五样中间产物齐全 | `src/flow/run.js`<br>`test/flow-run.test.js` | `T-01` `T-03` `T-04` `T-05` | `flow-stages.md` | `A-5` `A-12` |
 | `T-07` | M5 | 逐句配音循环、把逐句音频拼成一条纯音频给停点 4、分批拼接（单次上限 20 段）、横屏和竖屏两套字幕规则（竖屏字号更大、每行更少字、位置更高） | `src/voice/speak.js`<br>`src/render/concat.js`<br>`src/render/subtitle.js`<br>`test/render-concat.test.js`<br>`test/subtitle.test.js` | `T-01` | `flow-stages.md` | `A-8` `A-9` `A-16` `A-17` `A-18` |
-| `T-08` | M5 | 装成 dsh 插件：挂载入口和 `cordis.patch.yml`，加英文和中文两份 README。**README 必须写数据流披露**：自带的默认语音引擎会把旁白文字发到微软的服务器（`node-edge-tts` 用的是 Edge 在线朗读服务）。这是本项目引入的第一个联网行为，用户有权在装之前知道，并且要写清怎么换成本地引擎。参照 `dsh-video-understand` 的 L0/L1/L2 披露表的做法。**不碰 `package.json`**——`T-01` 已经写好了 `dsh.bundle` 字段 | `host/narrate.js`<br>`cordis.patch.yml`<br>`README.md`<br>`README-zh.md` | `T-06` | 无 | `A-15` |
+| `T-08` | M5 | 装成 dsh 插件：挂载入口和 `cordis.patch.yml`，加英文和中文两份 README。**README 必须写数据流披露**：自带的默认语音引擎会把旁白文字发到微软的服务器（`node-edge-tts` 用的是 Edge 在线朗读服务）。这是本项目引入的第一个联网行为，用户有权在装之前知道，并且要写清怎么换成本地引擎。参照 `dsh-video-understand` 的 L0/L1/L2 披露表的做法。**要把 `dsh.bundle` 字段加回 `package.json`**——`0.1.0` 发布时故意移除了它，因为 `dsh-app-boot` 在读不到 bundle 的 patch 文件时会直接抛错（`dsh-app-boot/lib/index.js:811`），提前声明会让别人的整个 dsh profile 启动不了。这是 `T-08` 唯一允许改 `T-01` 文件的一处，理由写在这里 | `host/narrate.js`<br>`cordis.patch.yml`<br>`README.md`<br>`README-zh.md` | `T-06` | 无 | `A-15` |
 
 ## 每个验收检查由哪个任务交付
 

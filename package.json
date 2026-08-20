@@ -1,6 +1,6 @@
 {
   "name": "dsh-narrate",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "DeepSeek Harness (dsh) plugin: turn one idea into a narrated video cut from your own asset folder, stopping four times to ask you first.",
   "keywords": [
@@ -23,23 +23,26 @@
   "engines": {
     "node": ">=20"
   },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  },
   "scripts": {
     "test": "node --test 'test/**/*.test.js'"
   },
   "files": [
-    "host",
     "src",
-    "cordis.patch.yml",
+    "docs/crew",
     "README.md",
     "README-zh.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "dependencies": {
     "node-edge-tts": "^1.2.10"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stuarthu/dsh-narrate.git"
+  },
+  "homepage": "https://github.com/stuarthu/dsh-narrate#readme",
+  "bugs": {
+    "url": "https://github.com/stuarthu/dsh-narrate/issues"
   }
 }
