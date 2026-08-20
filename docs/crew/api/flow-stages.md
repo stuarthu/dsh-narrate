@@ -2,7 +2,8 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 版本 | 4 |
+| 版本 | 5 |
+| 版本 5 改了什么 | `meta` 多一个 `approvedStops`：用户在哪几个停点点过头。**停点 1 不在里面**——它的点头就是回答问题本身，没有额外的确认动作；停点 2、3、4 各要一次明确的"继续"。补上 `E_OUT_OF_ORDER`、`E_STOP_NOT_REACHED`、`E_NO_SUCH_STOP`、`E_NO_SUCH_STEP` 四个错误名。**加法改动** |
 | 版本 4 改了什么 | 补上写文稿那一步的五个错误名：`E_EMPTY_ANSWER`、`E_NO_SUCH_QUESTION`、`E_INTERVIEW_INCOMPLETE`、`E_COMPOSE_FAILED`、`E_SCRIPT_UNUSABLE`。**加法改动** |
 | 版本 3 改了什么 | 加两个错误名：`E_JOB_MISSING`（工作文件本身不在）和 `E_RENDER_OUTPUT_UNREADABLE`（成片读不出）。原来这两种情况借用了 `E_SECTION_MISSING` 和 `E_AUDIO_MISSING`，名字说的是错事。**这是加法改动**，另一侧不用重跑 |
 | 版本 2 改了什么 | 裁静音的规则从“裁到不超过 0.15 秒”改成“完全裁掉”，并写明阈值。原来的写法和本文件里的契约测试自相矛盾（`T-01` 实测发现）。这是**破坏性改动**，两侧都要重读——当时只有 `T-01` 在跑，它同时拿两侧文件，代价为零 |
@@ -28,7 +29,8 @@ JSON，UTF-8，缩进 2 空格。所有时间单位是**秒**，浮点数，保�
     "language": "zh",
     "stage": "voice",
     "stopPoint": 4,
-    "waitingForUser": true
+    "waitingForUser": true,
+    "approvedStops": [2]
   },
   "idea": "讲清楚 Rust 为什么快",
   "interview": {
@@ -119,6 +121,10 @@ JSON，UTF-8，缩进 2 空格。所有时间单位是**秒**，浮点数，保�
 | `E_INTERVIEW_INCOMPLETE` | 还有问题没回答就想写文稿。停点 1 不能被跳过 |
 | `E_COMPOSE_FAILED` | 写稿那一步（模型）自己失败了。**必须用这个码**，不能让一个没有码的错误冒出去——那样模型失败和程序 bug 就分不开了 |
 | `E_SCRIPT_UNUSABLE` | 写稿那一步没给出一句能用的话。不写半个文稿 |
+| `E_OUT_OF_ORDER` | 想做的这一步，前面还有没做完的、或者有停点没得到用户的"继续" |
+| `E_STOP_NOT_REACHED` | 想给一个还没走到的停点点头。那等于把停点绕掉了 |
+| `E_NO_SUCH_STOP` | 停点编号不是 1 到 4 |
+| `E_NO_SUCH_STEP` | 步骤名不认识 |
 | `E_RENDER_OUTPUT_UNREADABLE` | 渲染跑完了，但输出文件读不出时长 |
 
 ## 好不好用
