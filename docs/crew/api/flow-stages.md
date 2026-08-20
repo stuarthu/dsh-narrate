@@ -2,7 +2,8 @@
 
 | 项目 | 值 |
 | --- | --- |
-| 版本 | 3 |
+| 版本 | 4 |
+| 版本 4 改了什么 | 补上写文稿那一步的五个错误名：`E_EMPTY_ANSWER`、`E_NO_SUCH_QUESTION`、`E_INTERVIEW_INCOMPLETE`、`E_COMPOSE_FAILED`、`E_SCRIPT_UNUSABLE`。**加法改动** |
 | 版本 3 改了什么 | 加两个错误名：`E_JOB_MISSING`（工作文件本身不在）和 `E_RENDER_OUTPUT_UNREADABLE`（成片读不出）。原来这两种情况借用了 `E_SECTION_MISSING` 和 `E_AUDIO_MISSING`，名字说的是错事。**这是加法改动**，另一侧不用重跑 |
 | 版本 2 改了什么 | 裁静音的规则从“裁到不超过 0.15 秒”改成“完全裁掉”，并写明阈值。原来的写法和本文件里的契约测试自相矛盾（`T-01` 实测发现）。这是**破坏性改动**，两侧都要重读——当时只有 `T-01` 在跑，它同时拿两侧文件，代价为零 |
 | 拥有者 | `flow` 模块拥有这个格式 |
@@ -113,6 +114,11 @@ JSON，UTF-8，缩进 2 空格。所有时间单位是**秒**，浮点数，保�
 | `E_ASSET_TOO_SHORT` | 素材可用长度短于该句音频，需要按补长规则处理 |
 | `E_SENTENCE_UNPLANNED` | 有句子既不在 `shots` 也不在 `missing` 里 |
 | `E_WRITE_FOREIGN_SECTION` | 一个阶段试图写不属于它的节 |
+| `E_EMPTY_ANSWER` | 反问的回答是空白。空白不算回答，否则下一步会以为问完了 |
+| `E_NO_SUCH_QUESTION` | 回答的编号没有对应的问题 |
+| `E_INTERVIEW_INCOMPLETE` | 还有问题没回答就想写文稿。停点 1 不能被跳过 |
+| `E_COMPOSE_FAILED` | 写稿那一步（模型）自己失败了。**必须用这个码**，不能让一个没有码的错误冒出去——那样模型失败和程序 bug 就分不开了 |
+| `E_SCRIPT_UNUSABLE` | 写稿那一步没给出一句能用的话。不写半个文稿 |
 | `E_RENDER_OUTPUT_UNREADABLE` | 渲染跑完了，但输出文件读不出时长 |
 
 ## 好不好用
