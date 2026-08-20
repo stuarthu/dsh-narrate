@@ -36,6 +36,18 @@ node --test 'test/clip-file.test.js'    # one file — this is the "single test"
 The tests cut real video and real audio, so `ffmpeg` and `ffprobe` must be on `PATH`, and a
 font covering the language under test must be installed (`fonts-noto-cjk` for Chinese).
 
+QA is separate and runnable: `sh docs/crew/qa/run-all.sh`.
+
+**Neither replaces one real dsh session.** Two bugs in this repository passed every unit test
+and only showed up when the thing actually ran: a relative path resolved against a changed
+working directory, and a tool that returned the wrong content shape and rendered nothing. When
+you touch the mount, boot it:
+
+```sh
+dsh plugin --profile headless add link:/path/to/dsh-narrate
+cd /tmp/scratch && dsh --profile headless "call narrate_start with the idea …"
+```
+
 Two tests reach the Microsoft speech endpoint used by the bundled voice engine. **With no
 network they skip out loud** — they print why and are marked skipped, never failed. Keep that
 property when adding a test that needs the network: a red build must mean our code is wrong.
@@ -124,11 +136,17 @@ running against real data, not by thinking.
     `output.render` must be a function. `test/mount.test.js` checks every schema against a
     copy of that rule, and against dsh's own validator when it can be imported.
 
-12. **The agent cannot be forced into an order.** The host has no way to make the agent call
+12. **`output.render` must return content blocks**, `[{ type: 'text', text: '…' }]`. Returning a
+    bare array of strings throws nothing — dsh accepts it as lossless JSON — but the agent sees
+    `(no output)` and the tool is silently mute. Found by running a real session after every
+    unit test passed; the old test only asserted "serialises to JSON". `test/mount.test.js` now
+    asserts the block shape and that a real return value renders visible text.
+
+13. **The agent cannot be forced into an order.** The host has no way to make the agent call
     tools in sequence, so every rule that matters is a check inside `execute`. A rule that
     lives only in a tool's `description` is a suggestion.
 
-13. **Report what happened.** A skipped test says it skipped. A placeholder says it is a
+14. **Report what happened.** A skipped test says it skipped. A placeholder says it is a
     placeholder. When the plugin replaces output of its own, it says so rather than letting
     the line vanish.
 

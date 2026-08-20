@@ -151,13 +151,32 @@ describe('T-11 挂载的形状（写错就把用户的 dsh 弄坏）', () => {
     assert.deepEqual(disposed.sort(), [...TOOL_NAMES].sort());
   });
 
-  test('render 返回的是无损 JSON（dsh 会拿它过 snapshotJsonValue）', async () => {
+  test('render 返回的是内容块，不是裸字符串数组', async () => {
+    // 这条是真跑一次才补上的。原来只断言"可 JSON 化"，六个工具全绿，
+    // 但在真的 dsh 会话里 agent 看到的是 `(no output)`——工具是哑的。
+    // dsh 要的形状是 [{ type: 'text', text: '…' }]（见 dsh-ffmpeg 的 buildTextRenderer）。
     const ctx = mount();
     for (const [name, tool] of ctx.registered) {
       const rendered = tool.output.render({}, {});
+      assert.ok(Array.isArray(rendered), `${name} 的 render 必须返回数组`);
+      assert.ok(rendered.length > 0, `${name} 的 render 不能返回空数组，那就是 (no output)`);
+      for (const block of rendered) {
+        assert.equal(typeof block, 'object', `${name} 的 render 返回了裸字符串，agent 会看到 (no output)`);
+        assert.equal(block.type, 'text', `${name} 的内容块缺 type: 'text'`);
+        assert.equal(typeof block.text, 'string', `${name} 的内容块缺 text`);
+      }
       assert.doesNotThrow(() => JSON.parse(JSON.stringify(rendered)), `${name} 的 render 返回了不可 JSON 化的东西`);
-      assert.notEqual(rendered, undefined, `${name} 的 render 不能返回 undefined`);
     }
+  });
+
+  test('render 对真实返回值也给出看得见的文字', async () => {
+    const ctx = mount({ workdir: await tmp() });
+    const tool = ctx.registered.get('narrate_start');
+    const value = await tool.execute({ idea: '一句想法' });
+    const [block] = tool.output.render({}, value);
+    assert.ok(block.text.includes(value.jobDir), '渲染出来的文字里该看得到任务目录');
+    assert.ok(block.text.includes('IQ-1'), '渲染出来的文字里该看得到问题，否则 agent 还得自己翻返回值');
+    assert.ok(block.text.length > 40, `渲染出来只有 ${block.text.length} 个字，太少`);
   });
 });
 

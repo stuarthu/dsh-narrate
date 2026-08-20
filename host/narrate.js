@@ -17,6 +17,9 @@
 //     required / additionalProperties / items / enum / const，加 description /
 //     title / default / examples。**minLength、pattern、format 一律被拒**
 //   - execute 的返回值会先按 schema 校验再交给 render
+//   - **render 必须返回内容块数组**：`[{ type: 'text', text: '…' }]`。返回裸字符串
+//     数组不会报错——dsh 认它是合法 JSON——但 agent 看到的是 `(no output)`。
+//     这个是真跑一次才发现的：单元测试只断言了"可 JSON 化"，全绿，而工具其实是哑的。
 // 写错 schema 的后果是启动时抛异常，等于弄坏用户整个 dsh profile。
 import { mkdir } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
@@ -72,6 +75,15 @@ function surface(error) {
 
 const asRecord = (value) => (typeof value === 'object' && value !== null ? value : {});
 
+/**
+ * 把若干行文字包成 dsh 要的内容块。**这一层不能省。**
+ * 直接返回字符串数组不会报错，但 agent 那边显示的是 `(no output)`——工具变成哑的。
+ * 形状抄自 dsh-ffmpeg 的 buildTextRenderer。
+ */
+const textRenderer = (lines) => (args, value) => [
+  { type: 'text', text: lines(args, value).filter((line) => line !== undefined).join('\n') },
+];
+
 function requireString(args, key) {
   const value = asRecord(args)[key];
   if (typeof value !== 'string' || value.trim() === '') {
@@ -124,10 +136,11 @@ function buildTools(config) {
           questions: arr(QUESTION, '要先问用户的问题'),
           nextStep: str('下一步该调哪个工具'),
         }, ['jobDir', 'questions', 'nextStep']),
-        render: (_args, value) => [
+        render: textRenderer((_args, value) => [
           `开了新任务：${asRecord(value).jobDir ?? ''}`,
           `先问用户这 ${asRecord(value).questions?.length ?? 0} 个问题，再写文稿。`,
-        ],
+          ...(asRecord(value).questions ?? []).map((q) => `${q.id}  ${q.text}\n      推荐：${q.suggestion}`),
+        ]),
       },
       async execute(args) {
         const idea = requireString(args, 'idea');
@@ -170,9 +183,9 @@ function buildTools(config) {
           remaining: arr(str('还没回答的问题编号'), '还差哪几个'),
           nextStep: str('下一步该调哪个工具'),
         }, ['complete', 'remaining', 'nextStep']),
-        render: (_args, value) => (asRecord(value).complete
+        render: textRenderer((_args, value) => (asRecord(value).complete
           ? ['问完了，可以写文稿了。']
-          : [`还差 ${asRecord(value).remaining?.length ?? 0} 个问题：${(asRecord(value).remaining ?? []).join('、')}`]),
+          : [`还差 ${asRecord(value).remaining?.length ?? 0} 个问题：${(asRecord(value).remaining ?? []).join('、')}`])),
       },
       async execute(args) {
         const jobDir = requireString(args, 'jobDir');
@@ -213,14 +226,14 @@ function buildTools(config) {
             '太长的句子'),
           nextStep: str('下一步'),
         }, ['sentences', 'warnings', 'nextStep']),
-        render: (_args, value) => {
+        render: textRenderer((_args, value) => {
           const v = asRecord(value);
           const lines = (v.sentences ?? []).map((s) => `${s.id}  ${s.text}`);
           if ((v.warnings ?? []).length > 0) {
             lines.push('', '太长的句子：', ...(v.warnings ?? []).map((w) => `${w.sentenceId} ${w.message}`));
           }
           return lines;
-        },
+        }),
       },
       async execute(args) {
         const jobDir = requireString(args, 'jobDir');
@@ -254,15 +267,16 @@ function buildTools(config) {
             ['clipPath', 'code', 'message']), '跳过的素材和原因'),
           nextStep: str('下一步'),
         }, ['needsUnderstanding', 'reused', 'skipped', 'nextStep']),
-        render: (_args, value) => {
+        render: textRenderer((_args, value) => {
           const v = asRecord(value);
           const lines = [
             `需要理解 ${v.needsUnderstanding?.length ?? 0} 段，复用 ${v.reused?.length ?? 0} 段，` +
             `跳过 ${v.skipped?.length ?? 0} 段。`,
           ];
           for (const s of v.skipped ?? []) lines.push(`跳过 ${s.clipPath}：[${s.code}] ${s.message}`);
+          for (const p of v.needsUnderstanding ?? []) lines.push(`需要理解：${p}`);
           return lines;
-        },
+        }),
       },
       async execute(args) {
         const assetsRoot = requireString(args, 'assetsRoot');
@@ -302,10 +316,10 @@ function buildTools(config) {
           durationSec: num('插件量出来的真实时长'),
           segments: arr(SEGMENT, '存下来的时间段'),
         }, ['clip', 'durationSec', 'segments']),
-        render: (_args, value) => {
+        render: textRenderer((_args, value) => {
           const v = asRecord(value);
           return [`${v.clip ?? ''}：${v.durationSec ?? 0} 秒，存了 ${v.segments?.length ?? 0} 个时间段。`];
-        },
+        }),
       },
       async execute(args) {
         const clipPath = requireString(args, 'clipPath');
@@ -350,10 +364,10 @@ function buildTools(config) {
             sentences: int('文稿几句'),
           }, ['questions', 'answered', 'sentences']),
         }, ['stage', 'stopPoint', 'waitingForUser', 'nextStep', 'counts']),
-        render: (_args, value) => {
+        render: textRenderer((_args, value) => {
           const v = asRecord(value);
           return [`阶段 ${v.stage ?? ''}，停点 ${v.stopPoint ?? 0}。下一步：${v.nextStep ?? ''}`];
-        },
+        }),
       },
       async execute(args) {
         const jobDir = requireString(args, 'jobDir');

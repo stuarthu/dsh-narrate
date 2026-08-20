@@ -12,6 +12,8 @@ Newest first. Each entry says what a user would notice.
   tool rather than a line of instruction.
 - Indexing now reports which clips still need understanding instead of trying to understand
   them itself, because the host cannot call a model. Durations are still measured on the spot.
+- Tool results are rendered as content blocks, so the agent actually sees them. A bare
+  string array serialises fine and shows as nothing at all.
 - A clip's duration is always measured, never taken from what the agent claims.
 
 - Indexes your asset folder. It walks it recursively, follows symlinks so clips on an
