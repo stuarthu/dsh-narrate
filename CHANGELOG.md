@@ -14,8 +14,13 @@ Newest first. Each entry says what a user would notice.
   `.narrate.txt` beside the clip, `clips.csv`, the json already there, the filename, the
   folder name. Notes are kept word for word and never parsed.
 - Only clips whose fingerprint changed are sent to the understanding step, so a second run
-  costs nothing. Your own writing is never overwritten by the machine, and when the plugin
-  does replace its own earlier output it says so.
+  costs nothing. A description is written once and then left alone; clear the field and scan
+  again if you want it filled fresh. Notes and tags merge, and the plugin says so when it
+  replaces earlier output of its own.
+- Tags hold keywords only. Resolution, frame rate, codec, container and words like `HD`
+  never become tags: they do not help choose a clip, and in real stock footage they are
+  often wrong. Each clip's duration is measured with `ffprobe`, because choosing and cutting
+  both depend on it. Nothing else about the file is stored.
 - One bad clip no longer sinks the whole run, and a file with an extension the plugin does
   not know is reported rather than silently skipped.
 

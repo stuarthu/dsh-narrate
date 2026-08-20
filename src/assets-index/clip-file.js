@@ -1,4 +1,4 @@
-// 一个 clip 一个描述文件。契约：docs/crew/api/assetsindex-shotplan.md 版本 7
+// 一个 clip 一个描述文件。契约：docs/crew/api/assetsindex-shotplan.md 版本 9
 //
 // 本模块只做一件事：安全地读写 `<clip 去掉扩展名>.json`。
 //
@@ -17,7 +17,7 @@ import { basename, dirname, join, parse } from 'node:path';
 export const SCHEMA = 'dsh-narrate/clip@1';
 
 /** 这几个键是我们的。文件里别的键都是别人的，一律原样保留。 */
-export const OUR_KEYS = Object.freeze(['schema', 'clip', 'fingerprint', 'fromYou', 'fromMachine']);
+export const OUR_KEYS = Object.freeze(['schema', 'clip', 'fingerprint', 'measured', 'fromYou', 'fromMachine']);
 
 /**
  * 第一次动别人的文件之前存的备份后缀。和 dsh-crew 覆盖用户预设前存 `.bak`
@@ -85,10 +85,19 @@ function emptyRecord(clipPath) {
     schema: SCHEMA,
     clip: basename(clipPath),
     fingerprint: '',
+    measured: {},
     fromYou: { description: '', tags: [], notes: '', segments: [], sources: [] },
     fromMachine: {},
   };
 }
+
+/**
+ * `measured` 这一节的形状版本。改了字段就加一，这样老文件即使素材没变也会重测，
+ * 而且整节被替换掉，不会留下已经不要了的字段。
+ * 这就是"存的和现在的规则不一致就重写"的落实办法。
+ * 版本 2：只留 durationSec，不再存分辨率、帧率、编码、容器。
+ */
+export const MEASURED_SHAPE = 2;
 
 /**
  * 读一个 clip 的描述文件。还没有就返回 null——那不是错误，是还没入库。
@@ -134,6 +143,7 @@ export async function readClipFile(clipPath) {
     ...data, // 别人的键先铺开，一个都不丢
     ...base,
     ...Object.fromEntries(OUR_KEYS.filter((k) => k in data).map((k) => [k, data[k]])),
+    measured: { ...(data.measured ?? {}) },
     fromYou: { ...base.fromYou, ...(data.fromYou ?? {}) },
     fromMachine: { ...(data.fromMachine ?? {}) },
   };
@@ -232,6 +242,19 @@ export async function writeMachineSection(clipPath, { fingerprint, fromMachine }
   return record;
 }
 
+/** 只写实测的那一节。别的键都原样带过去。 */
+export async function writeMeasuredSection(clipPath, measured) {
+  const base = await baseFor(clipPath);
+  const record = {
+    ...base,
+    schema: SCHEMA,
+    clip: basename(clipPath),
+    measured: { shape: MEASURED_SHAPE, ...measured },
+  };
+  await writeAtomic(clipJsonPath(clipPath), record);
+  return record;
+}
+
 /** 只写你给的那一节。`fromMachine`、`fingerprint` 和别人的键都原样带过去。 */
 export async function writeYourSection(clipPath, fromYou) {
   const base = await baseFor(clipPath);
@@ -254,9 +277,21 @@ export async function fingerprintOf(clipPath) {
   return `size:${info.size}|mtime:${Math.floor(info.mtimeMs / 1000)}`;
 }
 
-/** 要不要重新理解这段素材。三种情况都要：还没入库、机器那节是空的、指纹变了。 */
+/**
+ * 要不要重新**理解**这段素材（贵的那一步）。三种情况都要：还没入库、
+ * 机器那节还没有时间段、指纹变了。
+ *
+ * 注意这里不再看时长——时长归 `measured`，那是 ffprobe 量的，不是理解器给的。
+ */
 export function needsMachineRefresh(record, fingerprint) {
   if (!record) return true;
-  if (!(record.fromMachine?.durationSec > 0)) return true;
+  if (!(record.fromMachine?.segments?.length > 0)) return true;
+  return record.fingerprint !== fingerprint;
+}
+
+/** 要不要重测规格（便宜的那一步）。形状版本旧了、没测过、或者指纹变了，都要重测。 */
+export function needsRemeasure(record, fingerprint) {
+  if (!record) return true;
+  if (record.measured?.shape !== MEASURED_SHAPE) return true;
   return record.fingerprint !== fingerprint;
 }

@@ -1,4 +1,4 @@
-// 把你的输入翻译成 `fromYou` 那一节。契约：docs/crew/api/assetsindex-shotplan.md 版本 7
+// 把你的输入翻译成 `fromYou` 那一节。契约：docs/crew/api/assetsindex-shotplan.md 版本 10
 //
 // 你可以用任何顺手的方式写素材的描述和标签。这个模块负责把它们收拢成一种格式。
 // "任何方式"的真实含义是下面这组读取器，可以一个个加。
@@ -43,8 +43,31 @@ export class FromYouError extends Error {
 const clean = (s) => String(s ?? '').trim();
 const nonEmpty = (list) => list.map(clean).filter((x) => x !== '');
 
-/** 纯数字不当标签：`bench-001-4k` 里的 `001` 没有信息。 */
-const usefulTag = (t) => t !== '' && !/^\d+$/.test(t);
+/**
+ * 标签只放**关键词**，不放技术规格。
+ *
+ * 这不是嫌它们啰嗦，是因为它们会**主动误导**。实测四个 archive.org 素材：三个的
+ * 标签都写 `1920x1080` / `1080p` / `HD`，其中两个实际是 `640x360` 和 `532x300`；
+ * 一个写 `H.264` / `MP4`，实际是 `vp8` / `webm`。
+ *
+ * 这些东西的真值在 `measured` 里，是 ffprobe 量出来的。原则是：量，不要信。
+ */
+const SPEC_TAG = new RegExp(
+  [
+    '^\\d+$',                                 // 纯数字：1080、720
+    '^\\d{3,4}\\s*[x\u00d7]\\s*\\d{3,4}$',        // 1920x1080
+    '^\\d{3,4}[pi]$',                          // 1080p、720i
+    '^[48]k$',                                  // 4k、8k
+    '^\\d{1,3}\\s*fps$',                        // 30fps
+    '^(hd|uhd|fhd|sd|hi-?def|full\\s*hd|high\\s+definition|high\\s+quality|low\\s+quality)$',
+    '^(h\\.?26[45]|hevc|avc|x26[45]|mpeg-?4|mp4|m4v|webm|mkv|mov|avi|flv|wmv|ogv|ogg)$',
+    '^(vp[89]|av1|theora|xvid|divx|prores|dnxhd|aac|mp3|opus|vorbis|pcm|flac)$',
+  ].join('|'),
+  'i',
+);
+
+/** 是不是一个能当关键词用的标签。 */
+const usefulTag = (t) => t !== '' && !SPEC_TAG.test(t.trim());
 
 // ── 读取器。每个返回 { kind, source, description, tags, notes } 或 null ────
 
@@ -241,7 +264,21 @@ export async function collectFromYou({ clipPath, assetsRoot, chat, csvRows }) {
     const derivedTags = new Set(derived.flatMap((d) => d.tags));
     const base = previous.origin?.derived; // 上次我们推导出来的东西，当合并基准
     const stick = { description: '', notes: '' };
-    for (const field of ['description', 'notes']) {
+    // 描述只在空的时候填。一旦有了值就是你的，插件再也不碰它——包括它自己
+    // 上一版填进去的值。想让它重新填，把那个字段清空再扫一次。
+    // 这条规则简单到不会出错，代价是插件不会自动纠正一个填错的描述。
+    if (clean(previous.description) !== '') {
+      candidates.push({
+        kind: 'manual',
+        // 沿用原来的出处标签，不发明一个新的。发明新标签会让第二次运行的结果
+        // 和第一次不一样，可重跑就断了。
+        source: clean(previous.origin?.description) || 'manual',
+        description: clean(previous.description),
+        notes: '',
+        tags: [],
+      });
+    }
+    for (const field of ['notes']) {
       const held = clean(previous[field]);
       if (held === '' || derivedOf(field).has(held)) continue;
       if (base === undefined) {

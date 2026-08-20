@@ -17,6 +17,11 @@ async function put(root, rel, body = 'v'.repeat(64)) {
   return p;
 }
 
+/** 假的规格测量：测试里的"素材"是文本文件，ffprobe 量不了，所以注入一个。 */
+function fakeMeasure(byName = {}) {
+  return async (clipPath) => byName[basename(clipPath)] ?? { durationSec: 30 };
+}
+
 /** 假理解器：记下被问过哪些素材，按文件名返回结果。 */
 function fakeUnderstander(byName = {}, { fail = [] } = {}) {
   const asked = [];
@@ -25,7 +30,6 @@ function fakeUnderstander(byName = {}, { fail = [] } = {}) {
     const name = basename(clipPath);
     if (fail.includes(name)) throw new Error(`装作理解不了 ${name}`);
     return byName[name] ?? {
-      durationSec: 30,
       segments: [{ startSec: 0, endSec: 10, description: `${name} 的第一段`, tags: ['自动'], confidence: 'high' }],
       visualSearchDir: `/cache/${name}_avis`,
       engine: 'fake-l0',
@@ -52,14 +56,14 @@ describe('T-04 扫描：找素材', () => {
     await put(root, 'readme.txt', 'not a video');
     await put(root, '.hidden/d.mp4');                 // 隐藏目录不进
     const understand = fakeUnderstander();
-    const r = await scanAssets({ assetsRoot: root, understand });
+    const r = await scanAssets({ assetsRoot: root, understand, measure: fakeMeasure() });
     const names = r.clips.map((c) => basename(c.clipPath)).sort();
     assert.deepEqual(names, ['a.mp4', 'b.MOV', 'c.mkv']);
   });
 
   test('一个素材都没有时返回空结果，不报错', async () => {
     const root = await tmp();
-    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     assert.deepEqual(r.clips, []);
     assert.deepEqual(r.understood, []);
     assert.deepEqual(r.skipped, []);
@@ -71,14 +75,15 @@ describe('T-04 入库和复用', () => {
     const root = await tmp();
     for (const n of ['a.mp4', 'b.mp4', 'c.mp4']) await put(root, n);
     const understand = fakeUnderstander();
-    const r = await scanAssets({ assetsRoot: root, understand });
+    const r = await scanAssets({ assetsRoot: root, understand, measure: fakeMeasure() });
 
     assert.equal(r.clips.length, 3);
     assert.equal(r.understood.length, 3);
     for (const n of ['a.mp4', 'b.mp4', 'c.mp4']) {
       const rec = await readClipFile(join(root, n));
       assert.ok(rec, `${n} 没有描述文件`);
-      assert.equal(rec.fromMachine.durationSec, 30);
+      assert.equal(rec.measured.durationSec, 30);
+      assert.deepEqual(Object.keys(rec.measured).sort(), ['durationSec', 'shape'], '只该存时长');
       assert.equal(rec.fromMachine.segments[0].description, `${n} 的第一段`);
       assert.equal(rec.fromMachine.visualSearchDir, `/cache/${n}_avis`);
       assert.ok(rec.fromYou.tags.length > 0, '文件名至少该给出一个标签');
@@ -88,12 +93,12 @@ describe('T-04 入库和复用', () => {
   test('A-2：什么都没改再跑一次，理解次数为 0，文件字节不变', async () => {
     const root = await tmp();
     for (const n of ['a.mp4', 'b.mp4', 'c.mp4']) await put(root, n);
-    await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     const before = {};
     for (const n of ['a.json', 'b.json', 'c.json']) before[n] = await readFile(join(root, n), 'utf8');
 
     const understand = fakeUnderstander();
-    const r = await scanAssets({ assetsRoot: root, understand });
+    const r = await scanAssets({ assetsRoot: root, understand, measure: fakeMeasure() });
     assert.equal(understand.asked.length, 0, `不该再问理解器，却问了 ${understand.asked.length} 次`);
     assert.equal(r.understood.length, 0);
     assert.equal(r.reused.length, 3);
@@ -105,7 +110,7 @@ describe('T-04 入库和复用', () => {
   test('契约测试（被调侧）：只有指纹变了的那个被重算，而它手写的描述一字不变', async () => {
     const root = await tmp();
     for (const n of ['a.mp4', 'b.mp4', 'c.mp4']) await put(root, n);
-    await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
 
     // 你手改 b 的描述
     const bClip = join(root, 'b.mp4');
@@ -115,14 +120,14 @@ describe('T-04 入库和复用', () => {
     await utimes(bClip, new Date(0), new Date(0));
 
     const understand = fakeUnderstander({
-      'b.mp4': { durationSec: 55, segments: [{ startSec: 0, endSec: 5, description: '重算出来的' }], engine: 'fake-l0' },
+      'b.mp4': { segments: [{ startSec: 0, endSec: 5, description: '重算出来的' }], engine: 'fake-l0' },
     });
-    const r = await scanAssets({ assetsRoot: root, understand });
+    const r = await scanAssets({ assetsRoot: root, understand, measure: fakeMeasure() });
 
     assert.deepEqual(understand.asked.map((p) => basename(p)), ['b.mp4'], '只该问 b.mp4');
     assert.deepEqual(r.reused.map((p) => basename(p)).sort(), ['a.mp4', 'c.mp4']);
     const after = await readClipFile(bClip);
-    assert.equal(after.fromMachine.durationSec, 55, 'b 的机器那节该被重算');
+    assert.equal(after.fromMachine.segments[0].description, '重算出来的', 'b 的机器那节该被重算');
     assert.equal(after.fromYou.description, '这段是我在深圳拍的', '你手写的描述被冲掉了');
   });
 
@@ -133,6 +138,7 @@ describe('T-04 入库和复用', () => {
     await scanAssets({
       assetsRoot: root,
       understand: fakeUnderstander(),
+      measure: fakeMeasure(),
       chatByClip: { 'b.mp4': { description: '这段是深圳拍的', tags: ['深圳'], date: '2026-08-20' } },
     });
     assert.equal((await readClipFile(join(root, 'a.mp4'))).fromYou.description, '');
@@ -145,7 +151,7 @@ describe('T-04 入库和复用', () => {
     const root = await tmp();
     for (const n of ['a.mp4', 'b.mp4']) await put(root, n);
     await put(root, 'clips.csv', '文件名,描述,标签\na.mp4,表格给 a 的描述,机房\nb.mp4,表格给 b 的描述,机房\n');
-    await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     assert.equal((await readClipFile(join(root, 'a.mp4'))).fromYou.description, '表格给 a 的描述');
     assert.equal((await readClipFile(join(root, 'b.mp4'))).fromYou.description, '表格给 b 的描述');
   });
@@ -156,7 +162,7 @@ describe('T-04 一个坏素材不能拖垮整次入库', () => {
     const root = await tmp();
     for (const n of ['a.mp4', 'bad.mp4', 'c.mp4']) await put(root, n);
     const understand = fakeUnderstander({}, { fail: ['bad.mp4'] });
-    const r = await scanAssets({ assetsRoot: root, understand });
+    const r = await scanAssets({ assetsRoot: root, understand, measure: fakeMeasure() });
 
     assert.equal(r.understood.length, 2, '好的两个该做完');
     assert.equal(r.skipped.length, 1);
@@ -177,7 +183,7 @@ describe('T-04 一个坏素材不能拖垮整次入库', () => {
     const body = JSON.stringify({ source: 'archive.org', title: 'Mountain Fog', tags: ['Fog'] }, null, 2);
     await writeFile(target, body, 'utf8');
 
-    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     assert.equal(r.skipped.length, 0, `不该再跳过：${JSON.stringify(r.skipped)}`);
     assert.equal(r.understood.length, 2);
 
@@ -198,7 +204,7 @@ describe('T-04 一个坏素材不能拖垮整次入库', () => {
     await put(root, 'c.weirdformat');    // 不认识
     await put(root, 'readme.txt');       // 明确不是素材，安静跳过
     await put(root, 'cover.jpg');        // 同上
-    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     assert.deepEqual(r.clips.map((c) => basename(c.clipPath)).sort(), ['a.mp4', 'b.ogv']);
     assert.deepEqual(r.skipped.map((s) => basename(s.clipPath)), ['c.weirdformat']);
     assert.equal(r.skipped[0].code, 'E_UNKNOWN_MEDIA');
@@ -210,7 +216,7 @@ describe('T-04 一个坏素材不能拖垮整次入库', () => {
     await put(root, 'a.mov');
     const understand = fakeUnderstander();
     await assert.rejects(
-      () => scanAssets({ assetsRoot: root, understand }),
+      () => scanAssets({ assetsRoot: root, understand, measure: fakeMeasure() }),
       (e) => e.code === 'E_STEM_COLLISION',
     );
     assert.equal(understand.asked.length, 0, '停下之前不该问任何理解');
@@ -224,12 +230,14 @@ describe('T-04 把理解结果规整成时间段', () => {
     await put(root, 'a.mp4');
     await scanAssets({
       assetsRoot: root,
-      understand: async () => ({ durationSec: 42, description: '一台服务器机柜', engine: 'fake-l0' }),
+      measure: fakeMeasure({ 'a.mp4': { durationSec: 42 } }),
+      understand: async () => ({ description: '一台服务器机柜', engine: 'fake-l0' }),
     });
     const rec = await readClipFile(join(root, 'a.mp4'));
     assert.deepEqual(rec.fromMachine.segments, [
       { startSec: 0, endSec: 42, description: '一台服务器机柜', tags: [], confidence: 'low' },
     ]);
+    assert.equal(rec.measured.durationSec, 42, '时长归 measured，不归 fromMachine');
   });
 
   test('时间段乱序会排好，超出总长会截断，起止相等的丢掉', async () => {
@@ -237,8 +245,8 @@ describe('T-04 把理解结果规整成时间段', () => {
     await put(root, 'a.mp4');
     await scanAssets({
       assetsRoot: root,
+      measure: fakeMeasure({ 'a.mp4': { durationSec: 20 } }),
       understand: async () => ({
-        durationSec: 20,
         segments: [
           { startSec: 10, endSec: 15, description: '第二段' },
           { startSec: 0, endSec: 5, description: '第一段' },
@@ -254,16 +262,20 @@ describe('T-04 把理解结果规整成时间段', () => {
     assert.equal(segs.every((s) => s.confidence === 'low' || s.confidence === 'high'), true);
   });
 
-  test('理解器没给时长，算理解失败，机器那节留空以便重试', async () => {
+  test('理解器不用报时长了：时长归 ffprobe 量的那一节', async () => {
     const root = await tmp();
     await put(root, 'a.mp4');
+    const understand = fakeUnderstander();
     const r = await scanAssets({
       assetsRoot: root,
-      understand: async () => ({ segments: [{ startSec: 0, endSec: 1, description: 'x' }] }),
+      measure: fakeMeasure({ 'a.mp4': { durationSec: 77.5 } }),
+      understand,
     });
-    assert.equal(r.skipped[0].code, 'E_UNDERSTAND_FAILED');
-    assert.ok(r.skipped[0].message.includes('时长'));
-    assert.deepEqual((await readClipFile(join(root, 'a.mp4'))).fromMachine, {}, '机器那节该是空的');
+    assert.equal(r.understood.length, 1);
+    const rec = await readClipFile(join(root, 'a.mp4'));
+    assert.equal(rec.measured.durationSec, 77.5);
+    assert.equal(rec.fromMachine.durationSec, undefined, 'fromMachine 里不该再有时长');
+    assert.ok(rec.fromMachine.segments.length > 0);
   });
 
   test('一个时间段都规整不出来时，也算理解失败', async () => {
@@ -271,7 +283,8 @@ describe('T-04 把理解结果规整成时间段', () => {
     await put(root, 'a.mp4');
     const r = await scanAssets({
       assetsRoot: root,
-      understand: async () => ({ durationSec: 20, segments: [{ startSec: 5, endSec: 5, description: 'x' }] }),
+      measure: fakeMeasure(),
+      understand: async () => ({ segments: [{ startSec: 5, endSec: 5, description: 'x' }] }),
     });
     assert.equal(r.skipped[0].code, 'E_UNDERSTAND_FAILED');
   });
@@ -293,7 +306,7 @@ describe('T-04 评审补的测试', () => {
     await put(root, 'here.mp4');
     await symlink(elsewhere, join(root, '外置硬盘'));
 
-    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     const names = r.clips.map((c) => basename(c.clipPath)).sort();
     assert.deepEqual(names, ['here.mp4', 'onDrive.mp4'], '软链接目录里的素材该被扫到');
   });
@@ -303,7 +316,7 @@ describe('T-04 评审补的测试', () => {
     await put(root, 'a.mp4');
     await symlink(root, join(root, 'loop'));      // 指回自己
     await symlink(join(root, 'loop'), join(root, 'loop2'));
-    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     assert.deepEqual(r.clips.map((c) => basename(c.clipPath)), ['a.mp4']);
   });
 
@@ -311,19 +324,19 @@ describe('T-04 评审补的测试', () => {
     const root = await tmp();
     await put(root, 'a.mp4');
     await symlink(join(root, '不存在的目标.mp4'), join(root, 'broken.mp4'));
-    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     assert.deepEqual(r.clips.map((c) => basename(c.clipPath)), ['a.mp4']);
   });
 
   test('你那一节没变时不重写文件（不做无谓的写盘）', async () => {
     const root = await tmp();
     await put(root, 'a.mp4');
-    await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     const jsonPath = join(root, 'a.json');
     // 把修改时间设成一个很久以前的固定值，再扫一次，看它有没有被动过
     const old = new Date(1000000);
     await utimes(jsonPath, old, old);
-    await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     const after = await stat(jsonPath);
     assert.equal(Math.floor(after.mtimeMs / 1000), 1000, '文件被无谓地重写了');
   });
@@ -331,13 +344,13 @@ describe('T-04 评审补的测试', () => {
   test('你那一节变了就要写（上一条不能变成永不更新）', async () => {
     const root = await tmp();
     await put(root, 'a.mp4');
-    await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     const jsonPath = join(root, 'a.json');
     const old = new Date(1000000);
     await utimes(jsonPath, old, old);
     // 新加一个同名文本，你那一节就变了
     await put(root, 'a.mp4.narrate.txt', '后来补的描述\n');
-    await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    await scanAssets({ assetsRoot: root, understand: fakeUnderstander(), measure: fakeMeasure() });
     assert.notEqual(Math.floor((await stat(jsonPath)).mtimeMs / 1000), 1000, '变了却没写');
     assert.equal((await readClipFile(join(root, 'a.mp4'))).fromYou.description, '后来补的描述');
   });
@@ -349,6 +362,7 @@ describe('T-04 评审补的测试', () => {
     const r = await scanAssets({
       assetsRoot: root,
       understand: fakeUnderstander(),
+      measure: fakeMeasure(),
       // tags 给成字符串会在翻译里炸出一个没有错误码的 TypeError
       chatByClip: { 'b.mp4': { tags: '这不是数组' } },
     });

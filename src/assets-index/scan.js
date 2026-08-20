@@ -1,4 +1,4 @@
-// 扫素材文件夹，把每段素材入库。契约：docs/crew/api/assetsindex-shotplan.md 版本 7
+// 扫素材文件夹，把每段素材入库。契约：docs/crew/api/assetsindex-shotplan.md 版本 10
 //
 // 理解视频这一步是**注入**进来的，不是这里直接调的。原因很实在：`video_understand`
 // 是一个 dsh 的工具，只在 agent 的工具列表里存在，Node 代码调不到它。所以扫描
@@ -8,11 +8,16 @@
 // 另一条贯穿全文的规则：**一个坏素材不能拖垮整次入库。** 几百个素材扫到第 30 个
 // 出错就全盘失败，用户会不知道前 29 个到底存下来没有。所以逐个素材兜错，
 // 最后一起报。唯一例外是撞名——那是整个文件夹的问题，在动手之前就该停。
+import { execFile } from 'node:child_process';
 import { readdir, realpath, stat } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import { basename, extname, join } from 'node:path';
 
 import {
+  MEASURED_SHAPE,
   assertNoStemCollisions,
+  needsRemeasure,
+  writeMeasuredSection,
   fingerprintOf,
   needsMachineRefresh,
   readClipFile,
@@ -20,6 +25,9 @@ import {
   writeYourSection,
 } from './clip-file.js';
 import { collectFromYou, loadCsvRows } from './from-you.js';
+
+const run = promisify(execFile);
+const FFPROBE = () => process.env.DSH_FFPROBE_PATH || 'ffprobe';
 
 /**
  * 认得的视频扩展名。比较时统一转小写，所以 .MOV 也认。
@@ -94,20 +102,44 @@ async function findClips(dir, seen = new Set(), unknown = []) {
 }
 
 /**
+ * 量一段素材的时长。
+ *
+ * 只量时长。分辨率、帧率、编码、容器都不存——它们不影响"哪段素材配哪句话"，
+ * 存了也没人读。
+ *
+ * 但时长是承重的：挑素材的第一层漏斗就是"从起点算剩余长度盖不住这句旁白的
+ * 直接排除"，渲染时也要按它裁。而且它必须**量**，不能信别人写的：真实素材里
+ * 下载来源自己写的 `duration_seconds` 就和实际有出入。
+ *
+ * 这一步很便宜（一个素材约 30 毫秒），所以每次入库都重量，不一致就重写。
+ */
+export async function measureClip(clipPath) {
+  let out;
+  try {
+    ({ stdout: out } = await run(FFPROBE(), [
+      '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', clipPath,
+    ]));
+  } catch (error) {
+    throw new ScanError('E_ASSET_UNREADABLE', `ffprobe 读不出 ${basename(clipPath)} 的时长：${error.message}`);
+  }
+  const durationSec = Number(String(out).trim());
+  if (!Number.isFinite(durationSec) || durationSec <= 0) {
+    throw new ScanError('E_ASSET_UNREADABLE', `${basename(clipPath)} 量不出时长`);
+  }
+  return { durationSec: Math.round(durationSec * 1000) / 1000 };
+}
+
+/**
  * 把理解器给的结果规整成契约要的形状。
  *
  * 理解器可能只给一句整体描述（本地理解的 L0 层就是这样），那就补成覆盖全长的
  * 一个时间段，把握标 low——一句话代表不了十分钟里的几十个画面，说自己没把握
  * 才是诚实的。
  */
-function normalizeMachine(raw, clipPath) {
-  const durationSec = Number(raw?.durationSec);
-  if (!Number.isFinite(durationSec) || durationSec <= 0) {
-    throw new ScanError('E_UNDERSTAND_FAILED', `${basename(clipPath)} 的理解结果没有可用的时长`);
-  }
+function normalizeMachine(raw, clipPath, durationSec) {
   const round = (n) => Math.round(n * 1000) / 1000;
 
-  const given = Array.isArray(raw.segments) && raw.segments.length > 0
+  const given = Array.isArray(raw?.segments) && raw.segments.length > 0
     ? raw.segments
     : [{ startSec: 0, endSec: durationSec, description: raw.description ?? '', confidence: 'low' }];
 
@@ -126,10 +158,9 @@ function normalizeMachine(raw, clipPath) {
     throw new ScanError('E_UNDERSTAND_FAILED', `${basename(clipPath)} 的理解结果里没有一个有长度的时间段`);
   }
   return {
-    durationSec: round(durationSec),
     segments,
-    visualSearchDir: raw.visualSearchDir ?? '',
-    engine: String(raw.engine ?? 'unknown'),
+    visualSearchDir: raw?.visualSearchDir ?? '',
+    engine: String(raw?.engine ?? 'unknown'),
   };
 }
 
@@ -141,7 +172,7 @@ function normalizeMachine(raw, clipPath) {
  * `chatByClip` 按文件名给出你跟插件说过的话。
  * `onEvent` 可选，每个素材处理完叫一次，方便报进度。
  */
-export async function scanAssets({ assetsRoot, understand, chatByClip = {}, onEvent }) {
+export async function scanAssets({ assetsRoot, understand, measure = measureClip, chatByClip = {}, onEvent }) {
   let clipPaths;
   let unknownPaths;
   try {
@@ -183,7 +214,15 @@ export async function scanAssets({ assetsRoot, understand, chatByClip = {}, onEv
       // 没变就不写。几百个素材每次扫描都重写一遍是白做的写盘加 fsync。
       const before = await readClipFile(clipPath);
       const changed = JSON.stringify(before?.fromYou) !== JSON.stringify(fromYou);
-      const existing = changed ? await writeYourSection(clipPath, fromYou) : before;
+      // 规格每次都量，便宜，而且这是"存的和实际不一致就重写"的落实办法。
+      let existing = changed ? await writeYourSection(clipPath, fromYou) : before;
+      if (needsRemeasure(existing, fingerprint)) {
+        const measured = await measure(clipPath);
+        if (JSON.stringify(existing?.measured ?? {}) !== JSON.stringify({ shape: MEASURED_SHAPE, ...measured })) {
+          existing = await writeMeasuredSection(clipPath, measured);
+        }
+      }
+
       if (!needsMachineRefresh(existing, fingerprint)) {
         reused.push(clipPath);
         clips.push({ clipPath, record: existing });
@@ -202,7 +241,7 @@ export async function scanAssets({ assetsRoot, understand, chatByClip = {}, onEv
       }
       const record = await writeMachineSection(clipPath, {
         fingerprint,
-        fromMachine: normalizeMachine(raw, clipPath),
+        fromMachine: normalizeMachine(raw, clipPath, existing.measured.durationSec),
       });
       understood.push(clipPath);
       clips.push({ clipPath, record });

@@ -202,10 +202,10 @@ describe('T-02 描述文件：两节分工', () => {
     assert.equal(rec.fromYou.notes, '别用在商单视频里');
   });
 
-  test('没有写整个文件的入口：模块只导出两个窄的写函数', async () => {
+  test('没有写整个文件的入口：只有一节一个的窄写函数', async () => {
     const mod = await import('../src/assets-index/clip-file.js');
     const writers = Object.keys(mod).filter((k) => /^write/.test(k));
-    assert.deepEqual(writers.sort(), ['writeMachineSection', 'writeYourSection']);
+    assert.deepEqual(writers.sort(), ['writeMachineSection', 'writeMeasuredSection', 'writeYourSection']);
   });
 
   test('写是原子的：不留临时文件', async () => {

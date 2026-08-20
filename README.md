@@ -98,9 +98,20 @@ Two things worth knowing:
 - **Notes are never parsed.** Write "do not use this in a paid piece, the client will not
   allow that rack number to show" and the plugin keeps it word for word, and shows it to the
   model when writing the script and choosing shots. It never tries to interpret it.
-- **Your edits survive.** The plugin remembers what it derived last time, so it can tell
-  your writing apart from its own earlier output. It rewrites its own; it keeps yours. When
-  it does replace something of its own, it says so rather than letting the line vanish.
+- **A description is written once.** The plugin fills it only when it is empty. After that
+  the line is yours and the plugin never touches it again — not even a line it wrote itself.
+  If a description is wrong, clear that field and scan again to have it filled fresh.
+- **Tags are keywords only.** Resolution, frame rate, codec and container never become tags,
+  and neither do words like `HD` or `High Definition`. They do not help decide which clip
+  suits which sentence, and in real stock footage they are often simply wrong: four clips
+  all tagged `1080p` and `H.264` turned out to include a 640x360 one, a 532x300 one, and a
+  `vp8` one.
+- **Notes and tags still merge.** For those two the plugin remembers what it derived last
+  time, so it can tell your writing apart from its own earlier output. It rewrites its own
+  and keeps yours, and says so when it replaces something of its own.
+- **Only the length is measured.** `ffprobe` reads each clip's duration, because choosing a
+  clip for a sentence depends on whether it is long enough, and cutting it depends on the
+  same number. Nothing else about the file is stored.
 
 
 ## Requirements

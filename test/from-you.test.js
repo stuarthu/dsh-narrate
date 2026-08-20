@@ -160,7 +160,7 @@ describe('T-03 可重跑，而且手改不会丢', () => {
     assert.deepEqual(second, first, '两次结果不一样，不是可重跑的');
   });
 
-  test('你手改 bench.json 的描述，重跑之后还在，并被标成 manual', async () => {
+  test('你手改 bench.json 的描述，重跑之后还在', async () => {
     const s = await scene('bench.mp4', { 'bench.mp4.narrate.txt': '同名文本写的\n' });
     await writeYourSection(s.clip, await collect(s));
     // 你打开 bench.json 手改了描述
@@ -169,9 +169,8 @@ describe('T-03 可重跑，而且手改不会丢', () => {
 
     const got = await collect(s);
     assert.equal(got.description, '我自己改的这一句', '手改的描述被推导值盖掉了');
-    assert.ok(got.sources.includes('manual'), `应该标成 manual：${got.sources}`);
 
-    // 再跑一次还是一样（手改标记本身也要可重跑）
+    // 再跑一次还是一样
     await writeYourSection(s.clip, got);
     assert.deepEqual(await collect(s), got);
   });
@@ -252,7 +251,9 @@ describe('T-03 同名 json 里别人写的键（第七个读取器）', () => {
     assert.equal(got.description, 'Mountain Fog', 'title 才是在说画面的那个');
     assert.ok(got.notes.includes('Please visit my blog'), '他们的长文该进 notes 而不是丢掉');
     assert.ok(got.tags.includes('mountain'), 'search_term 是最有用的一个词，必须进标签');
-    assert.ok(got.tags.includes('Fog') && got.tags.includes('HD'), '他们的标签也全都留着');
+    assert.ok(got.tags.includes('Fog'), '关键词该留着');
+    assert.ok(!got.tags.includes('HD') && !got.tags.includes('1920x1080'),
+      `技术规格不该当关键词：${got.tags}`);
     assert.ok(got.sources.some((x) => x.startsWith('clipjson:')));
   });
 
@@ -284,23 +285,31 @@ describe('T-03 同名 json 里别人写的键（第七个读取器）', () => {
 });
 
 describe('T-03 三方合并：分清"你改的"和"我们上一版的输出"', () => {
-  test('读取器改了输出，旧输出会被新推导覆盖，而且会说出来', async () => {
+  test('描述一旦有了值就再也不动，连插件自己上一版填的也不动', async () => {
     const s = await scene('a.mp4', {
       'a.json': JSON.stringify({ title: '新的短标题', description: '很长的一段推广文案' }),
     });
-    // 装成上一版读取器的结果：描述取了长文案，基准也记着长文案
+    // 装成上一版读取器的结果：描述取了长文案
     await writeYourSection(s.clip, {
       description: '很长的一段推广文案',
       tags: [], notes: '', segments: [], sources: ['clipjson:a.json'],
       origin: { description: 'clipjson:a.json', derived: { description: '很长的一段推广文案', notes: '', tags: [] } },
     });
     const got = await collect(s);
-    assert.equal(got.description, '新的短标题', '旧输出该让位给新推导');
-    assert.ok(got.replaced?.some((r) => r.field === 'description'), '覆盖了就要说出来');
-    assert.ok(got.replaced[0].was.includes('推广文案'));
+    assert.equal(got.description, '很长的一段推广文案', '有值就不该被换掉');
+    assert.equal(got.replaced, undefined, '没换东西，不该报');
   });
 
-  test('你在我们写完之后改的，和基准不一样，所以粘住', async () => {
+  test('描述是空的时候才填', async () => {
+    const s = await scene('a.mp4', { 'a.json': JSON.stringify({ title: '来源写的标题' }) });
+    await writeYourSection(s.clip, {
+      description: '', tags: [], notes: '', segments: [], sources: [],
+    });
+    const got = await collect(s);
+    assert.equal(got.description, '来源写的标题', '空的时候该填上');
+  });
+
+  test('你手改的描述当然也一直在', async () => {
     const s = await scene('a.mp4', { 'a.json': JSON.stringify({ title: '来源写的标题' }) });
     await writeYourSection(s.clip, {
       description: '我自己改的这一句',
@@ -309,19 +318,16 @@ describe('T-03 三方合并：分清"你改的"和"我们上一版的输出"', (
     });
     const got = await collect(s);
     assert.equal(got.description, '我自己改的这一句', '手改被冲掉了');
-    assert.ok(got.sources.includes('manual'));
-    assert.equal(got.replaced, undefined, '这不是覆盖，不该报');
+    assert.equal(got.replaced, undefined);
   });
 
-  test('老文件没有合并基准时，让新推导赢，但一定要说出来', async () => {
+  test('清空描述再扫一次，插件会重新填上（这是唯一的重填办法）', async () => {
     const s = await scene('a.mp4', { 'a.json': JSON.stringify({ title: '来源写的标题' }) });
-    // 没有 origin，就是这个机制之前写下的文件
-    await writeYourSection(s.clip, {
-      description: '不知道是谁写的', tags: [], notes: '', segments: [], sources: ['clipjson:a.json'],
-    });
-    const got = await collect(s);
-    assert.equal(got.description, '来源写的标题');
-    assert.ok(got.replaced?.[0].reason.includes('没有合并基准'));
+    await writeYourSection(s.clip, { description: '填错的一句', tags: [], notes: '', segments: [], sources: [] });
+    assert.equal((await collect(s)).description, '填错的一句');
+    // 你把那个字段清空
+    await writeYourSection(s.clip, { description: '' });
+    assert.equal((await collect(s)).description, '来源写的标题', '清空之后该重新填上');
   });
 
   test('基准里有过、现在推导不出来的标签算旧输出；从没推导过的算你加的', async () => {
