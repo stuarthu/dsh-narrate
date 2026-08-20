@@ -2,8 +2,7 @@
 
 # dsh-narrate
 
-Version 0.1.0 in `package.json`, **nothing released yet**. What is described
-below is what the code on `main` does.
+Version 0.1.0
 
 A [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/DeepSeek-Harness) plugin.
 You give it one idea. It stops four times to ask you first. Then it builds a video
@@ -12,9 +11,10 @@ and the words burned onto the picture.
 
 Landscape (16:9) for YouTube and bilibili. Portrait (9:16) for TikTok and Shorts.
 
-## Status: it works end to end, and it is not released yet
+## Status: first release
 
-Read this before you install.
+Read this before you install. This is 0.1.0 — the whole flow works and is
+tested, but it has had one release and no users yet, so expect rough edges.
 
 **What works today**
 
@@ -34,8 +34,6 @@ Read this before you install.
 
 **What is still missing**
 
-- **It is not on npm yet.** `npm install dsh-narrate` does not work. Install from a
-  local checkout — see [Install](#install).
 - The understanding step is a plug-in point. The plugin tells the agent which clips
   need looking at; how well it answers is up to the agent and its tools. With no
   understanding at all, matching still works from your own descriptions and tags,
@@ -146,16 +144,18 @@ Two things worth knowing:
 
 ## Install
 
-The package is not on npm yet, so install it from a checkout:
+```sh
+dsh plugin --profile tui add dsh-narrate
+```
+
+To work on the plugin itself, install it from a checkout instead:
 
 ```sh
 git clone https://github.com/stuarthu/dsh-narrate
 dsh plugin --profile tui add link:/path/to/dsh-narrate
 ```
 
-Once it is released, `dsh plugin --profile tui add dsh-narrate` will be enough.
-
-That registers ten tools the agent can call:
+Either way it registers ten tools the agent can call:
 
 | Tool | What it does |
 | --- | --- |

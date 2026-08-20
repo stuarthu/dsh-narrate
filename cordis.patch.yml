@@ -2,8 +2,9 @@
 #
 # 装法：dsh plugin --profile tui add dsh-narrate
 #
-# 这个插件注册六个面向 agent 的工具（narrate_start / narrate_answer /
-# narrate_script / narrate_index / narrate_describe / narrate_status）。
+# 这个插件注册十个面向 agent 的工具：narrate_start / narrate_answer /
+# narrate_script / narrate_index / narrate_describe / narrate_shotplan /
+# narrate_voice / narrate_render / narrate_approve / narrate_status。
 # 宿主这一侧只管规则、校验、编号和存盘；写文稿、补问、调 video_understand 都由
 # agent 做——宿主调不到模型。理由写在 docs/crew/hld.md 第 4.1 节。
 #
@@ -15,3 +16,17 @@
       #   # 每条视频的工作目录放在哪。相对路径按你启动 dsh 的目录算。
       #   # 里面一条视频一个子目录，工作文件叫 job.json。
       #   workdir: '.narrate'
+      #
+      #   # 换语音引擎只改这里，产品代码零改动。占位符：%TEXT_FILE%（要念的那句
+      #   # 话，一个文件）、%OUT_FILE%（音频写到哪）、%LANG%、%VOICE%。
+      #   # 不写就用自带的引擎——它会把旁白文字发给微软，见 README 的隐私一节。
+      #   # 完整契约：docs/crew/api/voice-engine.md
+      #   voice:
+      #     command: ['my-tts', '--in', '%TEXT_FILE%', '--out', '%OUT_FILE%', '--lang', '%LANG%']
+      #     timeoutMs: 60000
+      #
+      #   # 成片分辨率。不写就按横竖屏定：横屏 1920x1080，竖屏 1080x1920。
+      #   # 机器慢或者只是想快点看效果时可以调小。
+      #   target:
+      #     width: 1280
+      #     height: 720

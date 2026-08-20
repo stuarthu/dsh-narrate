@@ -2,91 +2,89 @@
 
 Newest first. Each entry says what a user would notice.
 
-## Unreleased
+## 0.1.0 — 2026-08-20
 
-- **All four stop points are reachable from a dsh session now.** Four more tools: plan the
-  shots, speak the script, render the video, and record that you said "go ahead". Before this
-  you could only get as far as the second stop point.
-- Asking where a job stands now gives one answer instead of two. The mount used to keep its
-  own idea of the order, which stopped understanding anything past the second stop point.
-- **A folder with only one or two clips works.** Rarity weighting scored every word at exactly
-  zero when a word appeared in every clip, so with a single clip nothing matched and no
-  sentence got a picture. Common words still count for almost nothing; they just no longer
-  count for nothing at all.
-- **A whole video comes out the other end.** Every sentence is spoken, cut, subtitled and
-  joined into one file, at 1920x1080 for landscape or 1080x1920 for portrait.
-- A clip that is shorter than its narration no longer stops the render. If it is short by a
-  fifth or less the picture slows down; more than that and it loops. The narration is never
-  sped up or slowed — that is what makes narration sound fake.
-- Clips of any size and frame rate can be mixed. Each one is fitted into the frame with black
-  bars rather than stretched, and every part is encoded to one shape so joining them does not
-  re-encode and does not lose quality. The finished file is checked by decoding all of it,
-  because a join can break without ffmpeg reporting an error.
-- **Subtitles are now placed where you would expect on a phone.** Sizes and margins used to be
-  handed to ffmpeg as pixels, which libass silently rescaled: in portrait the subtitle landed
-  at the *top* of the frame. Sizes are now ratios of the frame, so a subtitle looks the same
-  at any resolution.
-- The text file handed to the speech engine is deleted once the line is spoken. It is kept when
-  the line fails, since that is when you need to see it.
-- **It is a real dsh plugin now.** `dsh plugin --profile tui add dsh-narrate` registers six
-  tools the agent can call: start a video, record an answer, hand in a script, index the asset
-  folder, hand in what a clip contains, and ask where things stand.
-- Stop point one works with no model and no network: the four questions are fixed. Stop point
-  two refuses to store a script while a question is unanswered, and that is a check inside the
-  tool rather than a line of instruction.
-- Indexing now reports which clips still need understanding instead of trying to understand
-  them itself, because the host cannot call a model. Durations are still measured on the spot.
-- Tool results are rendered as content blocks, so the agent actually sees them. A bare
-  string array serialises fine and shows as nothing at all.
-- A clip's duration is always measured, never taken from what the agent claims.
+First release. One idea becomes one narrated video, and it stops four times to
+ask you first.
 
-- Indexes your asset folder. It walks it recursively, follows symlinks so clips on an
-  external drive are found, and writes one `<clip name>.json` beside each clip.
-- **An existing json of that name is updated, not refused.** Stock footage sites ship
-  metadata beside each clip; the plugin reads its title, description, tags and search term
-  and uses them. Keys it did not create are left untouched, and a `.bak` copy is saved once
-  before the first time it touches a file it did not write.
-- Seven ways to describe a clip, folded into one shape: conversation, a hand edit, a
-  `.narrate.txt` beside the clip, `clips.csv`, the json already there, the filename, the
-  folder name. Notes are kept word for word and never parsed.
-- Only clips whose fingerprint changed are sent to the understanding step, so a second run
-  costs nothing. A description is written once and then left alone; clear the field and scan
-  again if you want it filled fresh. Notes and tags merge, and the plugin says so when it
-  replaces earlier output of its own.
-- Tags hold keywords only. Resolution, frame rate, codec, container and words like `HD`
-  never become tags: they do not help choose a clip, and in real stock footage they are
-  often wrong. Each clip's duration is measured with `ffprobe`, because choosing and cutting
-  both depend on it. Nothing else about the file is stored.
-- One bad clip no longer sinks the whole run, and a file with an extension the plugin does
-  not know is reported rather than silently skipped.
+An earlier draft of this section described only the first milestone. It was
+never released, so it has been replaced rather than kept — what follows is what
+this version actually does.
 
-## 0.1.0
+**The four stop points**
 
-First release. This is an early version: the pieces that turn one sentence into
-a finished clip work and are tested, but the parts that turn one *idea* into a
-whole video are not built yet.
+Nothing moves past one without a clear yes from you, and each is a check inside
+a tool rather than a line of instruction an agent could ignore.
 
-What works:
+1. Four fixed questions before the script is written — no model and no network
+   needed. Answering them *is* the yes.
+2. The script, one numbered sentence per line. Handing in a script while a
+   question is unanswered is refused.
+3. The shot list, plus the sentences that have **no matching clip**, said plainly
+   instead of filled with something that nearly fits.
+4. An audio-only file. You listen to the pace before any picture is made,
+   because if the pace is wrong the whole video has to be made again.
 
-- Speak one sentence with a text-to-speech engine, trim the silence off both
-  ends, and measure the real length of the audio.
-- Cut a clip from one of your own video files to exactly that length, mix the
-  narration in, and burn the sentence onto the picture as a subtitle.
-- A job file (`job.json`) that every stage reads and writes, where each stage
-  can only write its own section. Writing another stage's section raises an
-  error straight away instead of corrupting the video.
+**Making the video**
+
+- Every sentence is spoken, cut, subtitled and joined into one file — 1920x1080
+  for landscape, 1080x1920 for portrait.
+- Picture length follows audio length, never the other way round. A clip short
+  by a fifth or less is slowed; more than that and it loops. The narration is
+  never sped up or slowed, which is what makes narration sound fake.
+- Clips of any size and frame rate can be mixed. Each is fitted into the frame
+  with black bars rather than stretched, and every part is encoded to one shape,
+  so joining them needs no re-encoding and loses no quality. The finished file
+  is checked by decoding all of it, because a join can break without ffmpeg
+  reporting an error.
+- Subtitles are sized as ratios of the frame, so they look the same at any
+  resolution, and they are burned after scaling rather than before.
 - A bundled voice engine that needs no API key, and a command-line contract so
-  you can swap in any other engine by changing configuration only.
+  you can swap in any other engine by changing configuration only. A sentence
+  you did not edit keeps its recording rather than being spoken again.
 
-What does not work yet:
+**Your asset folder**
 
-- There is no command that takes an idea and gives you a video. You write
-  `job.json` by hand for now.
-- No asset folder indexing, no script writing, no shot planning, no review
-  stops. Those are the next four milestones.
-- The plugin does not mount into dsh yet. 0.1.0 deliberately declares no
-  `dsh.bundle`: dsh throws when a bundle's patch file is missing, so declaring
-  the mount early would stop a whole profile from booting.
+- Indexed recursively, following symlinks so clips on an external drive are
+  found, writing one `<clip name>.json` beside each clip.
+- **An existing json of that name is updated, not refused.** Stock footage sites
+  ship metadata beside each clip; the plugin reads its title, description, tags
+  and search term and uses them. Keys it did not create are left untouched, and
+  a `.bak` copy is saved once before the first time it touches a file it did not
+  write.
+- Seven ways to describe a clip, folded into one shape: conversation, a hand
+  edit, a `.narrate.txt` beside the clip, `clips.csv`, the json already there,
+  the filename, the folder name. Notes are kept word for word and never parsed.
+- Tags hold keywords only. Resolution, frame rate, codec, container and words
+  like `HD` never become tags: they do not help choose a clip, and in real stock
+  footage they are often wrong. Each clip's duration is measured with `ffprobe`,
+  never taken from a metadata field. Nothing else about the file is stored.
+- Only clips whose fingerprint changed are sent to the understanding step, so a
+  second run costs nothing. A description is written once and then left alone;
+  clear the field and scan again to have it filled fresh.
+- One bad clip never sinks the whole run, and a file with an extension the
+  plugin does not know is reported rather than silently skipped.
 
-Please read the **Privacy** section of the README before you use the bundled
-voice engine. It sends your narration text to a Microsoft server.
+**In dsh**
+
+Ten tools: start a video, record an answer, hand in a script, index the asset
+folder, hand in what a clip contains, plan the shots, speak the script, render
+the video, record that you said go ahead, and ask where things stand.
+
+The split comes from how dsh works: the host cannot call a model. The plugin
+holds the rules and the memory; the agent holds the judgement.
+
+**What is not there yet**
+
+- A landscape clip in a portrait video gets wide black bars above and below.
+  Keeping the shape is honest but is not what TikTok and Shorts look like.
+  Cropping to fill is not implemented.
+- The understanding step is a plug-in point. How well a clip is understood is up
+  to the agent and its tools. With no understanding at all, matching still works
+  from your own descriptions and tags, just less well.
+- Nothing is uploaded anywhere. No platform account, no scheduling, no
+  thumbnail. This plugin makes a file.
+
+**Privacy.** The bundled voice engine sends your narration text to a Microsoft
+endpoint. Your clips and your finished video never leave your machine. Both
+READMEs carry the full table.

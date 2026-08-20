@@ -2,8 +2,7 @@
 
 # dsh-narrate
 
-`package.json` 里写的是 0.1.0，**但还没有发布过任何版本**。下面写的是 `main`
-上的代码现在能做的事。
+版本 0.1.0
 
 一个 [DeepSeek Harness（dsh）](https://github.com/deepseek-ai/DeepSeek-Harness) 插件。
 
@@ -12,9 +11,10 @@
 
 横屏 16:9 给 YouTube 和 B 站，竖屏 9:16 给 TikTok 和 Shorts。
 
-## 状态：整条路已经走通，但还没发布
+## 状态：第一个版本
 
-装之前请先读这一节。
+装之前请先读这一节。这是 0.1.0——整条路都走通了、也都有测试，但只发过一个版本、
+还没有用户，所以粗糙的地方肯定有。
 
 **现在能用的**
 
@@ -32,8 +32,6 @@
 
 **还缺的**
 
-- **还没发到 npm。**`npm install dsh-narrate` 现在装不上。要从本地代码装，
-  见 [安装](#安装)。
 - 理解那一步是一个插入点。插件只告诉 agent 哪几段素材需要看，看得好不好取决于
   agent 和它手上的工具。完全不理解也能挑素材，靠你自己写的描述和标签，只是差一些。
 - 横屏素材放进竖屏成片，上下会有很宽的黑边。画面保住了比例、没有被拉伸，这是诚实
@@ -130,16 +128,18 @@ json，那些元数据是有用的：插件会读它的 `title`、`description`�
 
 ## 安装
 
-还没发到 npm，所以要从本地代码装：
+```sh
+dsh plugin --profile tui add dsh-narrate
+```
+
+如果你要改这个插件本身，从本地代码装：
 
 ```sh
 git clone https://github.com/stuarthu/dsh-narrate
 dsh plugin --profile tui add link:/path/to/dsh-narrate
 ```
 
-发布之后，`dsh plugin --profile tui add dsh-narrate` 就够了。
-
-装完会注册十个 agent 能调的工具：
+两种装法都会注册十个 agent 能调的工具：
 
 | 工具 | 做什么 |
 | --- | --- |
