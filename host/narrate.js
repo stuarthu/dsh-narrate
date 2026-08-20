@@ -460,13 +460,31 @@ function buildTools(config) {
           shots: arr(SHOT, '每句配到的画面'),
           missing: arr(MISSING, '没配上画面的句子'),
           notes: arr(str('提醒'), '要告诉用户的提醒'),
+          queries: arr(obj({ sentenceId: str('句子编号'), englishQuery: str('用过的英文查询') },
+            ['sentenceId', 'englishQuery']), '这一次实际用过的英文查询'),
+          usage: arr(obj({
+            assetPath: str('素材路径'),
+            count: int('被用了几次'),
+            sentenceIds: arr(str('句子编号'), '用在哪几句上'),
+          }, ['assetPath', 'count', 'sentenceIds']), '每段素材用了几次，用得最多的排最前'),
           nextStep: str('下一步'),
-        }, ['shots', 'missing', 'notes', 'nextStep']),
+        }, ['shots', 'missing', 'notes', 'queries', 'usage', 'nextStep']),
         render: textRenderer((_args, value) => {
           const v = asRecord(value);
           const lines = [`${v.shots?.length ?? 0} 句配上了画面，${v.missing?.length ?? 0} 句没配上。`];
           for (const m of v.missing ?? []) lines.push(`缺画面 ${m.sentenceId}：${m.reason}`);
           for (const n of v.notes ?? []) lines.push(`提醒：${n}`);
+          // 反复用同一段素材，成片会显得单调。用了几次要说出来，用户才判断得了。
+          for (const u of v.usage ?? []) {
+            if (u.count > 1) lines.push(`${basename(u.assetPath)} 用了 ${u.count} 次：${u.sentenceIds.join('、')}`);
+          }
+          // 用过的英文查询要看得见。配错了画面，第一件要查的就是当时用了什么词。
+          if ((v.queries ?? []).length === 0) {
+            lines.push('这一次一句英文查询都没给。中文文稿对英文素材信息几乎配不上，'
+              + '下次带上 queries 会好很多。');
+          } else {
+            for (const q of v.queries) lines.push(`英文查询 ${q.sentenceId}：${q.englishQuery}`);
+          }
           lines.push(v.nextStep ?? '');
           return lines;
         }),
@@ -497,13 +515,26 @@ function buildTools(config) {
             });
           }
           const plan = assignShots({ sentences, candidates });
+          // 用过的英文查询要留下来。它是跨语言匹配的全部依据，事后查"为什么配了这段
+          // 画面"第一件要看的就是它——不存下来，这个问题永远查不清。
+          const used = sentences
+            .filter((s) => s.englishQuery !== '')
+            .map((s) => ({ sentenceId: s.id, englishQuery: s.englishQuery }));
           const handle = await openJob(jobDir, 'shotplan');
-          handle.set('shotplan', { shots: plan.shots, missing: plan.missing, notes: plan.notes });
+          handle.set('shotplan', {
+            shots: plan.shots, missing: plan.missing, notes: plan.notes, queries: used,
+          });
           await handle.save();
           return {
             shots: plan.shots,
             missing: plan.missing,
             notes: (plan.notes ?? []).map((n) => (typeof n === 'string' ? n : n.message ?? String(n))),
+            queries: used,
+            // 挑素材那一侧内部叫 clipPath，交给 agent 时统一用 assetPath——
+            // 工作文件里的画面对应表用的就是这个名字，两处叫法不一样只会让人搞错。
+            usage: (plan.usage ?? []).map((u) => ({
+              assetPath: u.clipPath, count: u.count, sentenceIds: u.sentenceIds,
+            })),
             nextStep: '停点 3：把画面对应表和缺画面的句子给用户看，等他点头（narrate_approve stop 3）。'
               + (scanned.needsUnderstanding.length > 0
                 ? ` 另外还有 ${scanned.needsUnderstanding.length} 段素材没理解过，理解了可能配得更好。`

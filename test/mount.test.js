@@ -638,3 +638,70 @@ describe('T-12 四个新工具的真实返回值都渲染出看得见的文字',
     assert.match(status.text, /阶段 done|做完了/);
   });
 });
+
+describe('T-12 A-26：用过的英文查询要留得下来', () => {
+  test('英文查询存进工作文件，也在返回值里——查不到就没法诊断配错画面', async () => {
+    const dir = await tmp();
+    const assets = join(dir, 'assets');
+    await mkdir(assets, { recursive: true });
+    const clip = await asset(assets, 'sky');
+    const ctx = mount({ workdir: join(dir, 'jobs') });
+    const jobDir = await upToScript(ctx, { sentences: ['云在天上飘。'] });
+    await call(ctx, 'narrate_index', { assetsRoot: assets });
+    await call(ctx, 'narrate_describe', { clipPath: clip,
+      segments: [{ startSec: 0, endSec: 8, description: '蓝天上白云慢慢飘', tags: ['天空', '云'], confidence: 'high' }] });
+
+    const got = await call(ctx, 'narrate_shotplan', {
+      jobDir, assetsRoot: assets,
+      queries: [{ sentenceId: 'S-001', englishQuery: 'clouds bright sky' }],
+    });
+    // 返回值里看得到
+    assert.deepEqual(got.queries, [{ sentenceId: 'S-001', englishQuery: 'clouds bright sky' }]);
+    // 渲染出来的文字里也看得到
+    const text = ctx.registered.get('narrate_shotplan').output
+      .render({}, got).map((b) => b.text).join('\n');
+    assert.match(text, /clouds bright sky/);
+    // 工作文件里留下来了，事后还查得到
+    const job = await readJob(jobDir);
+    assert.equal(job.shotplan.queries[0].englishQuery, 'clouds bright sky');
+  });
+
+  test('一句英文查询都没给时不假装有', async () => {
+    const dir = await tmp();
+    const assets = join(dir, 'assets');
+    await mkdir(assets, { recursive: true });
+    const clip = await asset(assets, 'sky');
+    const ctx = mount({ workdir: join(dir, 'jobs') });
+    const jobDir = await upToScript(ctx, { sentences: ['云在天上飘。'] });
+    await call(ctx, 'narrate_index', { assetsRoot: assets });
+    await call(ctx, 'narrate_describe', { clipPath: clip,
+      segments: [{ startSec: 0, endSec: 8, description: '蓝天上白云慢慢飘', tags: ['天空', '云'], confidence: 'high' }] });
+    const got = await call(ctx, 'narrate_shotplan', { jobDir, assetsRoot: assets });
+    assert.deepEqual(got.queries, []);
+    const text = ctx.registered.get('narrate_shotplan').output
+      .render({}, got).map((b) => b.text).join('\n');
+    assert.match(text, /没给英文查询|一句英文查询都没给/);
+  });
+});
+
+describe('T-12 A-27：一段素材被用了几次，agent 要看得到', () => {
+  test('两句用同一段素材时，返回值和渲染文字里都说得出用了 2 次', async () => {
+    const dir = await tmp();
+    const assets = join(dir, 'assets');
+    await mkdir(assets, { recursive: true });
+    const clip = await asset(assets, 'sky', { seconds: 20 });
+    const ctx = mount({ workdir: join(dir, 'jobs') });
+    const jobDir = await upToScript(ctx, { sentences: ['云在天上飘。', '天上的云一直在动。'] });
+    await call(ctx, 'narrate_index', { assetsRoot: assets });
+    await call(ctx, 'narrate_describe', { clipPath: clip,
+      segments: [{ startSec: 0, endSec: 20, description: '蓝天上白云慢慢飘', tags: ['天空', '云'], confidence: 'high' }] });
+
+    const got = await call(ctx, 'narrate_shotplan', { jobDir, assetsRoot: assets });
+    const mine = (got.usage ?? []).find((u) => u.assetPath === clip);
+    assert.ok(mine, `usage 里该有这段素材，实际 ${JSON.stringify(got.usage)}`);
+    assert.equal(mine.count, 2, `该用了 2 次，实际 ${mine.count}`);
+    const text = ctx.registered.get('narrate_shotplan').output
+      .render({}, got).map((b) => b.text).join('\n');
+    assert.match(text, /用了 2 次/);
+  });
+});

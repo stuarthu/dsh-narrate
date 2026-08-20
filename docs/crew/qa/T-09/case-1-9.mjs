@@ -1,4 +1,4 @@
-// T-09 的 QA 用例 1 到 7。跑法：node docs/crew/qa/T-09/case-1-7.mjs
+// T-09 的 QA 用例 1 到 9。跑法：node docs/crew/qa/T-09/case-1-9.mjs
 // 计划见 docs/crew/qa/T-09-plan.md
 //
 // 这些用例是**从验收检查写的，不是从代码写的**。从代码出发写的检查只会证明
@@ -279,6 +279,84 @@ await check('7（Q-6）素材比旁白短：缺口小的放慢、大的循环，
       `窗口 ${window} 秒、旁白 ${want} 秒时该用 ${wantFill}，实际 ${got.segments[0].fill}`);
     assert.ok(Math.abs(got.durationSec - want) < 0.3,
       `${wantFill}：成片该约 ${want} 秒，实际 ${got.durationSec}`);
+  }
+});
+
+// ---- 用例 8（A-12）：五样中间产物都在 ----
+await check('8（A-12）中间产物齐全：索引、文稿、对应表、逐句音频、.ass 字幕', async () => {
+  const dir = await tmp();
+  const config = await fakeEngine(dir, 3);
+  // 素材放在自己的文件夹里，好让入库扫得到它
+  const assetsRoot = join(dir, 'assets');
+  await mkdir(assetsRoot, { recursive: true });
+  const asset = join(assetsRoot, 'a.mp4');
+  await makeClip(asset, { width: 640, height: 360, seconds: 8 });
+  const sentences = [{ id: 'S-001', text: '一句话。' }];
+  await readyJob(dir, { config, assets: [asset], sentences });
+  // 入库：这一步才写出索引
+  const { scanAssets } = await import(join(ROOT, 'src/assets-index/scan.js'));
+  await scanAssets({ assetsRoot });
+  const got = await renderVideo({ jobDir: dir });
+
+  const job = await readJob(dir);
+  // 1 索引：素材旁边那个 json
+  const { access } = await import('node:fs/promises');
+  await access(asset.replace(/\.mp4$/, '.json'));
+  // 2 文稿、3 对应表：工作文件里的两节
+  assert.ok((job.script?.sentences ?? []).length > 0, '文稿不在');
+  assert.ok((job.shotplan?.shots ?? []).length > 0, '画面对应表不在');
+  // 4 逐句音频
+  await access(job.voice.clips[0].audioPath);
+  // 5 字幕文件。**原来这一条要的是 .srt**，改成 .ass 的理由写在 prd.md 的 A-12 里。
+  await access(`${got.segments[0].path}.ass`);
+});
+
+// ---- 用例 9（A-10）：多句成片里，每一句的画面时长都跟着自己那句音频 ----
+await check('9（A-10）每句的画面时长和该句音频相差不超过 0.2 秒', async () => {
+  const dir = await tmp();
+  // 每句给不同长度的音频，才验得出"跟着自己那句"而不是"都一样长"
+  const lengths = [1.5, 3, 2.2];
+  const engines = [];
+  for (const [i, seconds] of lengths.entries()) {
+    await mkdir(join(dir, `e${i}`), { recursive: true });
+    engines.push(await fakeEngine(join(dir, `e${i}`), seconds));
+  }
+  const asset = join(dir, 'a.mp4');
+  await makeClip(asset, { width: 640, height: 360, seconds: 12 });
+  const sentences = lengths.map((_, i) => ({ id: `S-00${i + 1}`, text: `第 ${i + 1} 句。` }));
+  await createJob(dir, { slug: 'qa9', aspect: 'landscape', language: 'zh', idea: 'qa' });
+  const j = await openJob(dir, 'script');
+  j.set('interview', { questions: [{ id: 'IQ-1', text: '问', suggestion: '', answer: '答' }] });
+  j.set('script', { sentences });
+  await j.save();
+  const p2 = await openJob(dir, 'shotplan');
+  p2.set('shotplan', { shots: sentences.map((s) => ({
+    sentenceId: s.id, assetPath: asset, startSec: 0, endSec: 12, subtitle: s.text,
+  })), missing: [] });
+  await p2.save();
+  await approveStop(dir, 2);
+  await approveStop(dir, 3);
+  // 一句一个引擎，好让三句真的长度不同
+  for (const [i, sentence] of sentences.entries()) {
+    const only = await openJob(dir, 'script');
+    only.set('script', { sentences: [sentence] });
+    await only.save();
+    await speakScript({ jobDir: dir, config: engines[i] });
+  }
+  // 三句都放回去，逐句录音留着（文字没变就不重配）
+  const all = await openJob(dir, 'script');
+  all.set('script', { sentences });
+  await all.save();
+  await speakScript({ jobDir: dir, config: engines[0] });
+  await approveStop(dir, 4);
+
+  const got = await renderVideo({ jobDir: dir });
+  const audio = new Map((await readJob(dir)).voice.clips.map((c) => [c.sentenceId, c.durationSec]));
+  assert.equal(got.segments.length, 3, `该有 3 段，实际 ${got.segments.length}`);
+  for (const seg of got.segments) {
+    const want = audio.get(seg.sentenceId);
+    assert.ok(Math.abs(seg.durationSec - want) <= 0.2,
+      `${seg.sentenceId} 画面 ${seg.durationSec} 秒，音频 ${want} 秒，差得超过 0.2`);
   }
 });
 
