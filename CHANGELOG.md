@@ -2,6 +2,23 @@
 
 Newest first. Each entry says what a user would notice.
 
+## Unreleased
+
+- Indexes your asset folder. It walks it recursively, follows symlinks so clips on an
+  external drive are found, and writes one `<clip name>.json` beside each clip.
+- **An existing json of that name is updated, not refused.** Stock footage sites ship
+  metadata beside each clip; the plugin reads its title, description, tags and search term
+  and uses them. Keys it did not create are left untouched, and a `.bak` copy is saved once
+  before the first time it touches a file it did not write.
+- Seven ways to describe a clip, folded into one shape: conversation, a hand edit, a
+  `.narrate.txt` beside the clip, `clips.csv`, the json already there, the filename, the
+  folder name. Notes are kept word for word and never parsed.
+- Only clips whose fingerprint changed are sent to the understanding step, so a second run
+  costs nothing. Your own writing is never overwritten by the machine, and when the plugin
+  does replace its own earlier output it says so.
+- One bad clip no longer sinks the whole run, and a file with an extension the plugin does
+  not know is reported rather than silently skipped.
+
 ## 0.1.0
 
 First release. This is an early version: the pieces that turn one sentence into

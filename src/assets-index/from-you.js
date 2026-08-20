@@ -1,4 +1,4 @@
-// 把你的输入翻译成 `fromYou` 那一节。契约：docs/crew/api/assetsindex-shotplan.md 版本 5
+// 把你的输入翻译成 `fromYou` 那一节。契约：docs/crew/api/assetsindex-shotplan.md 版本 7
 //
 // 你可以用任何顺手的方式写素材的描述和标签。这个模块负责把它们收拢成一种格式。
 // "任何方式"的真实含义是下面这组读取器，可以一个个加。
@@ -6,12 +6,17 @@
 // 两条规则最要紧：
 //   1. **可重跑。** 输入源一个字没改，重跑一遍结果必须一字不差。否则你会发现
 //      自己写的描述莫名变了，然后再也不敢信这个工具。
-//   2. **手改不能丢。** 手改只存在于输出文件里，不存在于任何输入源，所以它是
-//      "推导不出来的值"。推导不出来就说明是你写的，标成 manual，从此粘住。
+//   2. **手改不能丢。** 手改只存在于输出文件里，不存在于任何输入源。
+//      但"推导不出来就是手改"这个判断不够——**我们自己上一个版本的输出也推导不
+//      出来**。真实数据撞出过这个 bug：读取器改成用 title 之后，上一次存下的
+//      长 description 被当成手改，永远压着新的推导结果。
+//      所以每次都记下**我们上次推导出来的值**当基准（`origin.derived`）。
+//      存着的值等于那个基准，就是我们的旧输出，放心覆盖；不等于，说明你在我们
+//      写完之后改过它，那才是手改，粘住。这就是标准的三方合并。
 import { readFile } from 'node:fs/promises';
 import { basename, dirname, join, parse, relative, sep } from 'node:path';
 
-import { readClipFile } from './clip-file.js';
+import { foreignKeysOf, readClipFile } from './clip-file.js';
 
 /** 越明确的越优先，数字越小赢。 */
 export const PRIORITY = Object.freeze({
@@ -19,8 +24,9 @@ export const PRIORITY = Object.freeze({
   manual: 2,
   sidecar: 3,
   csv: 4,
-  filename: 5,
-  folder: 6,
+  clipjson: 5,
+  filename: 6,
+  folder: 7,
 });
 
 const CSV_NAME = 'clips.csv';
@@ -147,6 +153,42 @@ async function readCsv(clipPath, assetsRoot, csvRows) {
   return { kind: 'csv', source: `csv:${CSV_NAME}`, description: descriptions[0] ?? '', tags, notes: '' };
 }
 
+/**
+ * 同名 json 里别人写的键。
+ *
+ * 从 archive.org 这类地方下载的素材，旁边自带一个同名 json，里面有 title、
+ * description、tags。那是**人写的、准确的**，比本地 AI 去理解一段没人说话的
+ * 风景素材靠得多。所以它是一个正经的输入源，不是障碍。
+ *
+ * 排在同名文本和表格之后：那两个是你特意为这个插件写的，更能代表你现在的意图。
+ */
+function readClipJson(record, clipPath) {
+  const theirs = foreignKeysOf(record);
+  if (Object.keys(theirs).length === 0) return null;
+
+  // 拿 title 当描述，不拿 description。这是被真实数据教的：archive.org 的
+  // description 常常是推广文案（"Please visit my blog to see all of my stock
+  // video footage..."），而 title 短、可靠、总在说画面。
+  // 他们那段长 description 有用但不该当描述，所以放进 notes——notes 是自由文本，
+  // 我们不解析，只在写文稿和挑素材时交给模型看。
+  const description = clean(theirs.title) || clean(theirs.description);
+  const notes = clean(theirs.title) ? clean(theirs.description) : '';
+
+  // search_term 是这类文件里最有用的一个词：干净、单个、高信息量。
+  // 而 tags 里大半是 HD / 1920x1080 / H.264 这种每个素材都有的格式噪音。
+  const listed = Array.isArray(theirs.tags) ? theirs.tags.map(String) : [];
+  const tags = nonEmpty([clean(theirs.search_term), ...listed]).filter(usefulTag);
+
+  if (description === '' && notes === '' && tags.length === 0) return null;
+  return {
+    kind: 'clipjson',
+    source: `clipjson:${basename(clipPath).replace(/\.[^.]*$/, '')}.json`,
+    description,
+    tags,
+    notes,
+  };
+}
+
 /** 你跟插件说的话。 */
 function readChat(chat) {
   if (!chat) return null;
@@ -178,57 +220,90 @@ function readChat(chat) {
  * `csvRows` 是可选的：传进来就复用，不传就自己读一次 `clips.csv`。
  */
 export async function collectFromYou({ clipPath, assetsRoot, chat, csvRows }) {
+  const record = await readClipFile(clipPath);
   const derived = [
     readChat(chat),
     await readSidecar(clipPath),
     await readCsv(clipPath, assetsRoot, csvRows),
+    readClipJson(record, clipPath),
     readFilename(clipPath),
     readFolder(clipPath, assetsRoot),
   ].filter(Boolean);
 
-  const previous = (await readClipFile(clipPath))?.fromYou;
+  const previous = record?.fromYou;
   const candidates = [...derived];
+  const replaced = [];
 
-  // 手改检测。推导不出来的值，只能是你自己写进文件的。
+  // 手改检测。一个存着的值推导不出来，有两种可能：你手写的，或者我们自己
+  // 上一个版本的输出。靠 origin 分辨。
   if (previous) {
-    const derivedDescriptions = new Set(nonEmpty(derived.map((d) => d.description)));
-    const derivedNotes = new Set(nonEmpty(derived.map((d) => d.notes)));
+    const derivedOf = (field) => new Set(nonEmpty(derived.map((d) => d[field])));
     const derivedTags = new Set(derived.flatMap((d) => d.tags));
-    const priorChat = (previous.sources ?? []).find((s) => s.startsWith('chat:'));
+    const base = previous.origin?.derived; // 上次我们推导出来的东西，当合并基准
+    const stick = { description: '', notes: '' };
+    for (const field of ['description', 'notes']) {
+      const held = clean(previous[field]);
+      if (held === '' || derivedOf(field).has(held)) continue;
+      if (base === undefined) {
+        // 老文件没有基准（这个机制之前写的）。分不出来就让新推导赢，但要说出来，
+        // 免得用户以为自己写的东西不声不响没了。原文还在 .bak 和输入源里。
+        replaced.push({ field, was: held, reason: '没有合并基准，按我们的旧输出处理' });
+      } else if (held === clean(base[field])) {
+        // 和上次推导的一模一样，就是我们的旧输出。
+        replaced.push({ field, was: held, reason: '是上一版推导出来的值' });
+      } else {
+        stick[field] = held; // 我们写完之后被改过，这才是你的手改
+      }
+    }
+    // 标签同理：上次推导出来有、现在推导不出来的，是旧输出；从来没推导出来过的，
+    // 是你自己加的。
+    const baseTags = new Set(nonEmpty(base?.tags ?? []));
+    const stickyTags = nonEmpty(previous.tags ?? []).filter(
+      (t) => !derivedTags.has(t) && !baseTags.has(t),
+    );
 
-    const stickyDescription = clean(previous.description);
-    const stickyNotes = clean(previous.notes);
-    const stickyTags = nonEmpty(previous.tags ?? []).filter((t) => !derivedTags.has(t));
-
-    if (
-      (stickyDescription !== '' && !derivedDescriptions.has(stickyDescription)) ||
-      (stickyNotes !== '' && !derivedNotes.has(stickyNotes)) ||
-      stickyTags.length > 0
-    ) {
-      // 原来是对话给的就保住 chat 的出处，否则算手改。两者优先级都在推导之上。
+    if (stick.description !== '' || stick.notes !== '' || stickyTags.length > 0) {
+      const priorChat = (previous.sources ?? []).find((x) => x.startsWith('chat:'));
       const fromChat = priorChat !== undefined && !chat;
       candidates.push({
         kind: fromChat ? 'chat' : 'manual',
         source: fromChat ? priorChat : 'manual',
-        description: derivedDescriptions.has(stickyDescription) ? '' : stickyDescription,
-        notes: derivedNotes.has(stickyNotes) ? '' : stickyNotes,
+        description: stick.description,
+        notes: stick.notes,
         tags: stickyTags,
       });
     }
   }
 
   const byPriority = [...candidates].sort((a, b) => PRIORITY[a.kind] - PRIORITY[b.kind]);
-  const pick = (field) => clean(byPriority.find((c) => clean(c[field]) !== '')?.[field]);
+  const winner = (field) => byPriority.find((c) => clean(c[field]) !== '');
 
   // 标签按优先级顺序合并去重，所以顺序也是确定的。
   const tags = [];
   for (const c of byPriority) for (const t of c.tags) if (!tags.includes(t)) tags.push(t);
 
+  // 把这一次推导出来的东西记下来，当下一次的合并基准。只记推导来源，
+  // 不含手改和对话——那两个本来就该粘住。
+  const derivedOnly = derived.filter((c) => c.kind !== 'chat');
+  const derivedTagList = [];
+  for (const c of derivedOnly) for (const t of c.tags) if (!derivedTagList.includes(t)) derivedTagList.push(t);
+  const pickDerived = (field) => clean(
+    [...derivedOnly].sort((a, b) => PRIORITY[a.kind] - PRIORITY[b.kind])
+      .find((c) => clean(c[field]) !== '')?.[field],
+  );
+  const origin = {
+    description: winner('description')?.source ?? '',
+    notes: winner('notes')?.source ?? '',
+    derived: { description: pickDerived('description'), notes: pickDerived('notes'), tags: derivedTagList },
+  };
+
   return {
-    description: pick('description'),
+    description: clean(winner('description')?.description),
     tags,
-    notes: pick('notes'),
+    notes: clean(winner('notes')?.notes),
     segments: previous?.segments ?? [],
     sources: [...new Set(candidates.map((c) => c.source))].sort(),
+    origin,
+    ...(replaced.length > 0 ? { replaced } : {}),
   };
 }

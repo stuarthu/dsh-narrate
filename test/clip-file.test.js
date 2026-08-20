@@ -14,6 +14,8 @@ import {
   writeYourSection,
   fingerprintOf,
   needsMachineRefresh,
+  BACKUP_SUFFIX,
+  foreignKeysOf,
 } from '../src/assets-index/clip-file.js';
 
 const tmp = () => mkdtemp(join(tmpdir(), 'narrate-clip-'));
@@ -75,28 +77,70 @@ describe('T-02 描述文件：绝不碰别人的文件', () => {
     assert.equal(await readClipFile(clip), null);
   });
 
-  test('读到一个没有 schema 标记的 JSON，报 E_FOREIGN_JSON', async () => {
+  test('已经有别人写的同名 JSON 时，读得到他们的键，不再报错', async () => {
     const dir = await tmp();
     const clip = await fakeClip(dir, 'bench.mp4');
-    await writeFile(join(dir, 'bench.json'), JSON.stringify({ hello: 'world' }), 'utf8');
-    await assert.rejects(() => readClipFile(clip), (e) => e.code === 'E_FOREIGN_JSON');
+    // archive.org 下载下来就是这个样子
+    await writeFile(join(dir, 'bench.json'), JSON.stringify({
+      source: 'archive.org', title: 'Mountain Fog', tags: ['Mountain', 'Fog'],
+    }), 'utf8');
+    const rec = await readClipFile(clip);
+    assert.equal(rec.source, 'archive.org', '他们的键该带回来');
+    assert.equal(rec.title, 'Mountain Fog');
+    assert.deepEqual(rec.tags, ['Mountain', 'Fog']);
+    assert.equal(rec.schema, SCHEMA, '我们的键用默认值补上');
+    assert.deepEqual(rec.fromMachine, {});
+    assert.deepEqual(Object.keys(foreignKeysOf(rec)).sort(), ['source', 'tags', 'title']);
   });
 
-  test('写的时候遇到别人的 JSON，报错并且那个文件一个字节都不变', async () => {
+  test('合法 JSON 但不是对象时报 E_FOREIGN_JSON（没地方放我们的键）', async () => {
     const dir = await tmp();
     const clip = await fakeClip(dir, 'bench.mp4');
-    const foreign = join(dir, 'bench.json');
-    const body = JSON.stringify({ someoneElse: '这是我自己的文件，别动' }, null, 2);
-    await writeFile(foreign, body, 'utf8');
-    const before = await stat(foreign);
-
+    await writeFile(join(dir, 'bench.json'), JSON.stringify(['一个数组']), 'utf8');
+    await assert.rejects(() => readClipFile(clip), (e) => e.code === 'E_FOREIGN_JSON');
     await assert.rejects(
       () => writeMachineSection(clip, { fingerprint: 'size:1|mtime:1', fromMachine: MACHINE }),
       (e) => e.code === 'E_FOREIGN_JSON',
     );
-    const after = await stat(foreign);
-    assert.equal(after.size, before.size, '别人的文件大小变了');
-    assert.equal(await readFile(foreign, 'utf8'), body, '别人的文件内容变了');
+    assert.equal(await readFile(join(dir, 'bench.json'), 'utf8'), '["一个数组"]', '不该被动过');
+  });
+
+  test('写进别人的 JSON：他们的键一个不动，而且先存一份原文备份', async () => {
+    const dir = await tmp();
+    const clip = await fakeClip(dir, 'bench.mp4');
+    const target = join(dir, 'bench.json');
+    const body = JSON.stringify({ source: 'archive.org', title: 'Mountain Fog', tags: ['Fog'] }, null, 2);
+    await writeFile(target, body, 'utf8');
+
+    await writeMachineSection(clip, { fingerprint: 'size:1|mtime:1', fromMachine: MACHINE });
+
+    const after = JSON.parse(await readFile(target, 'utf8'));
+    assert.equal(after.source, 'archive.org', '他们的键被弄丢了');
+    assert.equal(after.title, 'Mountain Fog');
+    assert.deepEqual(after.tags, ['Fog']);
+    assert.equal(after.fromMachine.durationSec, 63.2, '我们的键该加进去');
+    assert.equal(after.schema, SCHEMA);
+    assert.equal(await readFile(`${target}${BACKUP_SUFFIX}`, 'utf8'), body, '备份该是动手前的原文');
+  });
+
+  test('备份只存一次，第二次写不会用合并后的内容盖掉原文备份', async () => {
+    const dir = await tmp();
+    const clip = await fakeClip(dir, 'bench.mp4');
+    const target = join(dir, 'bench.json');
+    const body = JSON.stringify({ source: 'archive.org' }, null, 2);
+    await writeFile(target, body, 'utf8');
+    await writeMachineSection(clip, { fingerprint: 'size:1|mtime:1', fromMachine: MACHINE });
+    await writeMachineSection(clip, { fingerprint: 'size:2|mtime:2', fromMachine: MACHINE });
+    assert.equal(await readFile(`${target}${BACKUP_SUFFIX}`, 'utf8'), body, '备份被第二次写覆盖了');
+  });
+
+  test('本来就是我们写的文件，不留多余的备份', async () => {
+    const dir = await tmp();
+    const clip = await fakeClip(dir, 'bench.mp4');
+    await writeMachineSection(clip, { fingerprint: 'size:1|mtime:1', fromMachine: MACHINE });
+    await writeMachineSection(clip, { fingerprint: 'size:2|mtime:2', fromMachine: MACHINE });
+    const names = (await readdir(dir)).sort();
+    assert.deepEqual(names, ['bench.json', 'bench.mp4'], `不该有备份：${names}`);
   });
 
   test('我们的文件但 JSON 坏了，报 E_CLIP_JSON_UNREADABLE 且不覆盖', async () => {
@@ -212,14 +256,17 @@ describe('T-02 描述文件：指纹决定要不要重算', () => {
 });
 
 describe('T-02 代码评审补的测试', () => {
-  test('写你那一节时遇到别人的 JSON，也报错且那个文件不变', async () => {
+  test('写你那一节时也保住别人的键，并留下备份', async () => {
     const dir = await tmp();
     const clip = await fakeClip(dir, 'bench.mp4');
-    const foreign = join(dir, 'bench.json');
-    const body = JSON.stringify({ someoneElse: '别动' }, null, 2);
-    await writeFile(foreign, body, 'utf8');
-    await assert.rejects(() => writeYourSection(clip, YOURS), (e) => e.code === 'E_FOREIGN_JSON');
-    assert.equal(await readFile(foreign, 'utf8'), body);
+    const target = join(dir, 'bench.json');
+    const body = JSON.stringify({ source: 'archive.org', title: '别丢我' }, null, 2);
+    await writeFile(target, body, 'utf8');
+    await writeYourSection(clip, YOURS);
+    const after = JSON.parse(await readFile(target, 'utf8'));
+    assert.equal(after.title, '别丢我');
+    assert.equal(after.fromYou.description, YOURS.description);
+    assert.equal(await readFile(`${target}${BACKUP_SUFFIX}`, 'utf8'), body);
   });
 
   test('就算没人调 assertNoStemCollisions，写的时候也会挡住撞名', async () => {
@@ -260,12 +307,12 @@ describe('T-02 安全评审：软链接不能被写穿', () => {
     await writeFile(secret, body, 'utf8');
     await symlink(secret, join(dir, 'bench.json'));
 
-    // 读：跟着链接读到目标，目标没有我们的标记，所以判成别人的文件
-    await assert.rejects(() => readClipFile(clip), (e) => e.code === 'E_FOREIGN_JSON');
+    // 读：跟着链接读到目标，目标不是合法 JSON，所以合并不了
+    await assert.rejects(() => readClipFile(clip), (e) => e.code === 'E_CLIP_JSON_UNREADABLE');
     // 写：也被拦住
     await assert.rejects(
       () => writeMachineSection(clip, { fingerprint: 'size:1|mtime:1', fromMachine: MACHINE }),
-      (e) => e.code === 'E_FOREIGN_JSON',
+      (e) => e.code === 'E_CLIP_JSON_UNREADABLE',
     );
     assert.equal(await readFile(secret, 'utf8'), body, '软链接的目标被改了');
   });

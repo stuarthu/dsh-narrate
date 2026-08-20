@@ -25,12 +25,19 @@ Read this before you install. Version 0.1.0 is the **first milestone only**.
   own section. Writing another stage's section raises an error at once.
 - A bundled voice engine that needs no API key, and a command-line contract so
   you can swap in any other engine by changing configuration only.
+- Indexing your asset folder: it walks the folder (following symlinks, so clips on
+  an external drive are found), reads your descriptions and tags from any of seven
+  places, and only asks the understanding step about clips whose fingerprint changed.
+  One bad clip never sinks the whole run.
 
 **What does not work yet**
 
 - There is no command that takes an idea and gives you a video. You write the
   job file by hand for now.
-- No asset indexing, no script writing, no shot planning, no review stops.
+- The understanding step is a plug-in point, not yet wired to a real one, so the
+  machine-written half of each description is a placeholder. Your own descriptions
+  and tags are real and already used.
+- No script writing, no shot planning, no review stops.
 - The plugin does not mount into dsh yet.
 
 If you want a finished tool today, use one of the projects in
@@ -49,6 +56,52 @@ The bundled voice engine **sends your narration text to a Microsoft server**.
 The bundled engine is not an official public Microsoft API, so it can stop
 working at any time. That is exactly why the engine is a swappable contract and
 not built into the code.
+
+## Files this plugin writes into your asset folder
+
+Next to every clip it writes `<clip name without its extension>.json`. For `bench.mp4`
+that is `bench.json`, in the same folder.
+
+**If a file with that name already exists, this plugin updates it.** Stock footage sites
+often ship a metadata json beside each clip, and that metadata is worth having: the plugin
+reads its `title`, `description`, `tags` and `search_term` and uses them. It then adds its
+own keys to the same file — `schema`, `clip`, `fingerprint`, `fromYou`, `fromMachine`.
+**Every key it did not create is left exactly as it was.**
+
+Before it touches a file it did not write, it saves a copy as `<name>.json.bak`, once. So
+you can always get the original back.
+
+One caveat worth knowing. If the tool that produced that json rewrites the file later, it
+may drop the plugin's keys. Machine-derived data is simply recomputed, so nothing is really
+lost. But anything **you** typed into that file would be gone. Put writing you want to keep
+in a `.narrate.txt` file instead — see the next section.
+
+Nothing is written anywhere else in your asset folder, and no clip is ever modified.
+
+## How to describe a clip
+
+Use whichever of these suits you. The plugin folds them all into one shape. For the
+description the most explicit source wins; tags from every source are merged.
+
+| Precedence | Where you write it | How |
+| --- | --- | --- |
+| 1 (highest) | Tell the plugin in conversation | "that server rack clip is mine, the rights are clear" |
+| 2 | Edit `bench.json` by hand | Change `fromYou` in the file |
+| 3 | A text file beside the clip | `bench.mp4.narrate.txt` — first line is the description, lines starting with `#` are tags, the rest becomes notes |
+| 4 | A spreadsheet | `clips.csv` in the asset folder root: filename, description, tags separated by `;` |
+| 5 | The json already beside the clip | Whatever the download source put there |
+| 6 | The filename | `server-rack_close-up.mp4` is split on `-`, `_` and spaces into tags |
+| 7 (lowest) | The folder name | `assets/datacentre/bench.mp4` gives the tag `datacentre` |
+
+Two things worth knowing:
+
+- **Notes are never parsed.** Write "do not use this in a paid piece, the client will not
+  allow that rack number to show" and the plugin keeps it word for word, and shows it to the
+  model when writing the script and choosing shots. It never tries to interpret it.
+- **Your edits survive.** The plugin remembers what it derived last time, so it can tell
+  your writing apart from its own earlier output. It rewrites its own; it keeps yours. When
+  it does replace something of its own, it says so rather than letting the line vanish.
+
 
 ## Requirements
 
@@ -129,7 +182,7 @@ The full contract, including every error name, is in
 npm test
 ```
 
-31 tests. Two of them reach the Microsoft speech endpoint; with no network they
+112 tests. Two of them reach the Microsoft speech endpoint; with no network they
 skip out loud instead of failing. Everything else runs offline.
 
 ## Design documents

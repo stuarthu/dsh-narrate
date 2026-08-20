@@ -1,4 +1,4 @@
-// 一个 clip 一个描述文件。契约：docs/crew/api/assetsindex-shotplan.md 版本 4
+// 一个 clip 一个描述文件。契约：docs/crew/api/assetsindex-shotplan.md 版本 7
 //
 // 本模块只做一件事：安全地读写 `<clip 去掉扩展名>.json`。
 //
@@ -6,12 +6,24 @@
 //   1. 文件里 `fromYou` 和 `fromMachine` 是分开的两节。所以这里**没有**写整个
 //      文件的函数，只有两个窄的写函数，各自只动自己那一节。机器重算永远不会
 //      顺手把用户写的东西冲掉。
-//   2. 不是我们的文件，一个字节都不写。`bench.json` 是个很普通的名字，用户
-//      文件夹里可能本来就有一个别的。覆盖别人的文件是最不可原谅的一种 bug。
-import { open, readFile, rename, stat, unlink } from 'node:fs/promises';
+//   2. **同名 json 已经存在是正常情况，不是错误。** 从 archive.org 这类地方下载的
+//      素材，旁边自带一个同名 json，里面是 title / description / tags——正是我们
+//      想要的东西。所以用它：只**增加**我们自己的键，别人的键一个都不动。
+//   3. **动一个不是我们写的文件之前先备份，只备份一次。** 别人的文件被我们弄坏
+//      是最不可原谅的一种 bug，所以要留一条退路。
+import { access, copyFile, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, join, parse } from 'node:path';
 
 export const SCHEMA = 'dsh-narrate/clip@1';
+
+/** 这几个键是我们的。文件里别的键都是别人的，一律原样保留。 */
+export const OUR_KEYS = Object.freeze(['schema', 'clip', 'fingerprint', 'fromYou', 'fromMachine']);
+
+/**
+ * 第一次动别人的文件之前存的备份后缀。和 dsh-crew 覆盖用户预设前存 `.bak`
+ * 的习惯一致，所以不用另记一套规则。
+ */
+export const BACKUP_SUFFIX = '.bak';
 
 export class ClipFileError extends Error {
   constructor(code, message) {
@@ -59,6 +71,15 @@ export async function assertNoStemCollisions(clipPaths) {
   }
 }
 
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** 文件里不属于我们的那些键。下载来源写的 title / description / tags 就在这里。 */
+export function foreignKeysOf(record) {
+  const out = {};
+  for (const [k, v] of Object.entries(record ?? {})) if (!OUR_KEYS.includes(k)) out[k] = v;
+  return out;
+}
+
 function emptyRecord(clipPath) {
   return {
     schema: SCHEMA,
@@ -69,7 +90,13 @@ function emptyRecord(clipPath) {
   };
 }
 
-/** 读一个 clip 的描述文件。还没有就返回 null——那不是错误，是还没入库。 */
+/**
+ * 读一个 clip 的描述文件。还没有就返回 null——那不是错误，是还没入库。
+ *
+ * 已经有一个别人写的同名 json 也不是错误：把它的键原样带回来，我们的键用默认值
+ * 补上。只有**没法合并**的时候才报错：文件不是合法 JSON，或者是合法 JSON 但不是
+ * 一个对象（数组、字符串、数字都没地方放我们的键）。
+ */
 export async function readClipFile(clipPath) {
   const jsonPath = clipJsonPath(clipPath);
   let text;
@@ -84,19 +111,18 @@ export async function readClipFile(clipPath) {
   try {
     data = JSON.parse(text);
   } catch (error) {
-    // 解析不了就没法看 schema 字段，只能看原文里有没有我们的标记。
-    // 没有标记就当成别人的文件，报 E_FOREIGN_JSON 而不是 E_CLIP_JSON_UNREADABLE，
-    // 因为后者会让调用方以为可以覆盖重建。
-    if (!text.includes(SCHEMA)) {
-      throw new ClipFileError('E_FOREIGN_JSON', `${jsonPath} 不是合法 JSON，也没有我们的标记，不动它`);
-    }
-    throw new ClipFileError('E_CLIP_JSON_UNREADABLE', `${jsonPath} 是我们的文件但 JSON 坏了：${error.message}`);
+    // 解析不了就不能安全合并，也绝不覆盖。
+    throw new ClipFileError('E_CLIP_JSON_UNREADABLE', `${jsonPath} 不是合法 JSON：${error.message}`);
   }
 
-  if (data?.schema === undefined) {
-    throw new ClipFileError('E_FOREIGN_JSON', `${jsonPath} 没有 schema 标记，不是本插件写的，不动它`);
+  if (!isPlainObject(data)) {
+    throw new ClipFileError(
+      'E_FOREIGN_JSON',
+      `${jsonPath} 是合法 JSON 但不是一个对象（${Array.isArray(data) ? '数组' : typeof data}），` +
+        '没地方放我们的键，跳过这个素材',
+    );
   }
-  if (data.schema !== SCHEMA) {
+  if (data.schema !== undefined && data.schema !== SCHEMA) {
     throw new ClipFileError(
       'E_CLIP_SCHEMA_UNKNOWN',
       `${jsonPath} 的 schema 是 ${data.schema}，本模块只认 ${SCHEMA}`,
@@ -104,12 +130,18 @@ export async function readClipFile(clipPath) {
   }
 
   const base = emptyRecord(clipPath);
-  return {
+  const record = {
+    ...data, // 别人的键先铺开，一个都不丢
     ...base,
-    ...data,
+    ...Object.fromEntries(OUR_KEYS.filter((k) => k in data).map((k) => [k, data[k]])),
     fromYou: { ...base.fromYou, ...(data.fromYou ?? {}) },
     fromMachine: { ...(data.fromMachine ?? {}) },
   };
+  // 这个文件本来就是我们写的吗？读完之后我们的键一律补齐了默认值，所以光看
+  // record 分不出来。用一个**不可枚举**的标记记住：JSON.stringify 看不见它，
+  // 不会被写进文件，但代码能看到。备份和撞名检查都要靠它。
+  Object.defineProperty(record, 'wasOurs', { value: data.schema === SCHEMA, enumerable: false });
+  return record;
 }
 
 /**
@@ -135,8 +167,33 @@ async function writeAtomic(jsonPath, record) {
   }
 }
 
+const exists = async (p) => {
+  try {
+    await access(p);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /**
- * 读出现有内容当底子。读不出来的原因（别人的文件、坏文件）会原样抛出，写不下去。
+ * 第一次动一个不是我们写的文件之前，存一份备份。只存一次——第二次运行不该
+ * 拿"已经合并过"的内容去覆盖那份原始备份。
+ */
+async function backupOnce(jsonPath, alreadyOurs) {
+  if (alreadyOurs) return;
+  if (!(await exists(jsonPath))) return;
+  const backup = `${jsonPath}${BACKUP_SUFFIX}`;
+  if (await exists(backup)) return;
+  try {
+    await copyFile(jsonPath, backup);
+  } catch (error) {
+    throw new ClipFileError('E_BACKUP_FAILED', `存不下备份 ${backup}：${error.code}，所以不动原文件`);
+  }
+}
+
+/**
+ * 读出现有内容当底子，并在第一次动别人的文件前备份。读不出来的原因会原样抛出。
  *
  * 这里还兜住第二道撞名检查。`assertNoStemCollisions` 要看整个文件夹才能查，
  * 万一调用方忘了调，两段素材就会悄悄共用一个 json，谁后写谁赢，还不报错。
@@ -147,28 +204,43 @@ async function baseFor(clipPath) {
   const existing = await readClipFile(clipPath);
   if (existing === null) return emptyRecord(clipPath);
   const mine = basename(clipPath);
-  if (existing.clip && existing.clip !== mine) {
+  // 只有本插件写过的文件才能用 clip 字段判撞名。别人的文件里那个字段是我们
+  // 刚补的默认值，拿它比对没有意义。
+  const alreadyOurs = existing.wasOurs === true;
+  if (alreadyOurs && existing.clip !== mine) {
     throw new ClipFileError(
       'E_STEM_COLLISION',
       `${clipJsonPath(clipPath)} 已经属于 ${existing.clip}，不能再给 ${mine} 用。` +
         '这两个素材去掉扩展名后同名，请先改名。',
     );
   }
+  await backupOnce(clipJsonPath(clipPath), alreadyOurs);
   return existing;
 }
 
-/** 只写机器算的那一节。`fromYou` 原样带过去。 */
+/** 只写机器算的那一节。`fromYou` 和别人的键都原样带过去。 */
 export async function writeMachineSection(clipPath, { fingerprint, fromMachine }) {
   const base = await baseFor(clipPath);
-  const record = { ...base, fingerprint, fromMachine: { ...fromMachine } };
+  const record = {
+    ...base,
+    schema: SCHEMA,
+    clip: basename(clipPath),
+    fingerprint,
+    fromMachine: { ...fromMachine },
+  };
   await writeAtomic(clipJsonPath(clipPath), record);
   return record;
 }
 
-/** 只写你给的那一节。`fromMachine` 和 `fingerprint` 原样带过去。 */
+/** 只写你给的那一节。`fromMachine`、`fingerprint` 和别人的键都原样带过去。 */
 export async function writeYourSection(clipPath, fromYou) {
   const base = await baseFor(clipPath);
-  const record = { ...base, fromYou: { ...base.fromYou, ...fromYou } };
+  const record = {
+    ...base,
+    schema: SCHEMA,
+    clip: basename(clipPath),
+    fromYou: { ...base.fromYou, ...fromYou },
+  };
   await writeAtomic(clipJsonPath(clipPath), record);
   return record;
 }

@@ -98,7 +98,7 @@ describe('T-03 六个来源各自能读到', () => {
 
 describe('T-03 优先级和合并', () => {
   test('优先级顺序写死在模块里，越明确数字越小', () => {
-    assert.deepEqual(PRIORITY, { chat: 1, manual: 2, sidecar: 3, csv: 4, filename: 5, folder: 6 });
+    assert.deepEqual(PRIORITY, { chat: 1, manual: 2, sidecar: 3, csv: 4, clipjson: 5, filename: 6, folder: 7 });
   });
 
   test('同名文本的描述赢过表格的描述', async () => {
@@ -234,5 +234,119 @@ describe('T-03 评审补的测试', () => {
     const s = await scene('bench.mp4');
     const got = await collectFromYou({ clipPath: s.clip, assetsRoot: join(s.root, '不存在的子目录') });
     assert.ok(!got.sources.some((x) => x.startsWith('folder:')), `不该有 folder 来源：${got.sources}`);
+  });
+});
+
+describe('T-03 同名 json 里别人写的键（第七个读取器）', () => {
+  test('拿 title 当描述，他们那段长 description 进 notes', async () => {
+    const s = await scene('MountainFog.mp4', {
+      'MountainFog.json': JSON.stringify({
+        source: 'archive.org',
+        title: 'Mountain Fog',
+        description: 'Please visit my blog to see all of my stock video footage offered for Free use',
+        search_term: 'mountain',
+        tags: ['HD', '1920x1080', 'Fog'],
+      }),
+    });
+    const got = await collect(s);
+    assert.equal(got.description, 'Mountain Fog', 'title 才是在说画面的那个');
+    assert.ok(got.notes.includes('Please visit my blog'), '他们的长文该进 notes 而不是丢掉');
+    assert.ok(got.tags.includes('mountain'), 'search_term 是最有用的一个词，必须进标签');
+    assert.ok(got.tags.includes('Fog') && got.tags.includes('HD'), '他们的标签也全都留着');
+    assert.ok(got.sources.some((x) => x.startsWith('clipjson:')));
+  });
+
+  test('只有 description 没有 title 时，退回用 description', async () => {
+    const s = await scene('a.mp4', {
+      'a.json': JSON.stringify({ description: '一段海浪的特写', tags: ['ocean'] }),
+    });
+    const got = await collect(s);
+    assert.equal(got.description, '一段海浪的特写');
+    assert.equal(got.notes, '', '没有 title 时不该把同一段文字同时放两处');
+  });
+
+  test('你特意写的同名文本赢过下载来源的 json', async () => {
+    const s = await scene('a.mp4', {
+      'a.json': JSON.stringify({ title: '下载来源写的' }),
+      'a.mp4.narrate.txt': '我自己写的\n',
+    });
+    const got = await collect(s);
+    assert.equal(got.description, '我自己写的');
+    assert.ok(got.sources.includes('clipjson:a.json'), '输赢不影响它出现在来源清单里');
+  });
+
+  test('同名 json 只有我们自己的键时，这个读取器不出声', async () => {
+    const s = await scene('a.mp4');
+    await writeYourSection(s.clip, { description: '', tags: [], notes: '', segments: [], sources: [] });
+    const got = await collect(s);
+    assert.ok(!got.sources.some((x) => x.startsWith('clipjson:')), `不该有 clipjson 来源：${got.sources}`);
+  });
+});
+
+describe('T-03 三方合并：分清"你改的"和"我们上一版的输出"', () => {
+  test('读取器改了输出，旧输出会被新推导覆盖，而且会说出来', async () => {
+    const s = await scene('a.mp4', {
+      'a.json': JSON.stringify({ title: '新的短标题', description: '很长的一段推广文案' }),
+    });
+    // 装成上一版读取器的结果：描述取了长文案，基准也记着长文案
+    await writeYourSection(s.clip, {
+      description: '很长的一段推广文案',
+      tags: [], notes: '', segments: [], sources: ['clipjson:a.json'],
+      origin: { description: 'clipjson:a.json', derived: { description: '很长的一段推广文案', notes: '', tags: [] } },
+    });
+    const got = await collect(s);
+    assert.equal(got.description, '新的短标题', '旧输出该让位给新推导');
+    assert.ok(got.replaced?.some((r) => r.field === 'description'), '覆盖了就要说出来');
+    assert.ok(got.replaced[0].was.includes('推广文案'));
+  });
+
+  test('你在我们写完之后改的，和基准不一样，所以粘住', async () => {
+    const s = await scene('a.mp4', { 'a.json': JSON.stringify({ title: '来源写的标题' }) });
+    await writeYourSection(s.clip, {
+      description: '我自己改的这一句',
+      tags: [], notes: '', segments: [], sources: ['clipjson:a.json'],
+      origin: { description: 'clipjson:a.json', derived: { description: '来源写的标题', notes: '', tags: [] } },
+    });
+    const got = await collect(s);
+    assert.equal(got.description, '我自己改的这一句', '手改被冲掉了');
+    assert.ok(got.sources.includes('manual'));
+    assert.equal(got.replaced, undefined, '这不是覆盖，不该报');
+  });
+
+  test('老文件没有合并基准时，让新推导赢，但一定要说出来', async () => {
+    const s = await scene('a.mp4', { 'a.json': JSON.stringify({ title: '来源写的标题' }) });
+    // 没有 origin，就是这个机制之前写下的文件
+    await writeYourSection(s.clip, {
+      description: '不知道是谁写的', tags: [], notes: '', segments: [], sources: ['clipjson:a.json'],
+    });
+    const got = await collect(s);
+    assert.equal(got.description, '来源写的标题');
+    assert.ok(got.replaced?.[0].reason.includes('没有合并基准'));
+  });
+
+  test('基准里有过、现在推导不出来的标签算旧输出；从没推导过的算你加的', async () => {
+    const s = await scene('a.mp4', { 'a.json': JSON.stringify({ tags: ['现在还有'] }) });
+    await writeYourSection(s.clip, {
+      description: '', tags: ['现在还有', '上一版有过', '我自己加的'], notes: '', segments: [],
+      sources: ['clipjson:a.json'],
+      origin: { derived: { description: '', notes: '', tags: ['现在还有', '上一版有过'] } },
+    });
+    const got = await collect(s);
+    assert.ok(got.tags.includes('现在还有'), '还能推导出来的该在');
+    assert.ok(got.tags.includes('我自己加的'), '你加的标签该粘住');
+    assert.ok(!got.tags.includes('上一版有过'), `上一版推导出来的该消失：${got.tags}`);
+  });
+
+  test('这套机制本身也是可重跑的', async () => {
+    const s = await scene('a.mp4', {
+      'a.json': JSON.stringify({ title: '标题', description: '长文' }),
+      'a.mp4.narrate.txt': '我特意写的\n#我的标签\n',
+    });
+    const first = await collect(s);
+    await writeYourSection(s.clip, first);
+    const second = await collect(s);
+    assert.deepEqual(second, first, '两次结果不一样');
+    await writeYourSection(s.clip, second);
+    assert.deepEqual(await collect(s), first, '第三次也该一样');
   });
 });

@@ -170,20 +170,38 @@ describe('T-04 一个坏素材不能拖垮整次入库', () => {
     assert.ok(bad.fromYou.sources.includes('filename:bad.mp4'), '你的输入该留着');
   });
 
-  test('别人的 JSON 让那一个素材跳过，字节不变，别的照样做完', async () => {
+  test('别人的 JSON 是可用的输入源：入库成功，他们的键保住，还留了备份', async () => {
     const root = await tmp();
     for (const n of ['a.mp4', 'b.mp4']) await put(root, n);
-    const foreign = join(root, 'b.json');
-    const body = JSON.stringify({ someoneElse: '别动' }, null, 2);
-    await writeFile(foreign, body, 'utf8');
-    const size = (await stat(foreign)).size;
+    const target = join(root, 'b.json');
+    const body = JSON.stringify({ source: 'archive.org', title: 'Mountain Fog', tags: ['Fog'] }, null, 2);
+    await writeFile(target, body, 'utf8');
 
     const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
-    assert.equal(r.skipped.length, 1);
-    assert.equal(r.skipped[0].code, 'E_FOREIGN_JSON');
-    assert.equal((await stat(foreign)).size, size);
-    assert.equal(await readFile(foreign, 'utf8'), body);
-    assert.ok(await readClipFile(join(root, 'a.mp4')), 'a 该照样入库');
+    assert.equal(r.skipped.length, 0, `不该再跳过：${JSON.stringify(r.skipped)}`);
+    assert.equal(r.understood.length, 2);
+
+    const rec = await readClipFile(join(root, 'b.mp4'));
+    assert.equal(rec.source, 'archive.org', '他们的键该保住');
+    assert.equal(rec.title, 'Mountain Fog');
+    // 他们的 title 和 tags 成了第七个读取器的输入
+    assert.equal(rec.fromYou.description, 'Mountain Fog');
+    assert.ok(rec.fromYou.tags.includes('Fog'));
+    assert.ok(rec.fromYou.sources.some((x) => x.startsWith('clipjson:')));
+    assert.equal(await readFile(`${target}.bak`, 'utf8'), body, '该留一份动手前的备份');
+  });
+
+  test('认不出扩展名的文件要报出来，不静默跳过', async () => {
+    const root = await tmp();
+    await put(root, 'a.mp4');
+    await put(root, 'b.ogv');            // 现在认了
+    await put(root, 'c.weirdformat');    // 不认识
+    await put(root, 'readme.txt');       // 明确不是素材，安静跳过
+    await put(root, 'cover.jpg');        // 同上
+    const r = await scanAssets({ assetsRoot: root, understand: fakeUnderstander() });
+    assert.deepEqual(r.clips.map((c) => basename(c.clipPath)).sort(), ['a.mp4', 'b.ogv']);
+    assert.deepEqual(r.skipped.map((s) => basename(s.clipPath)), ['c.weirdformat']);
+    assert.equal(r.skipped[0].code, 'E_UNKNOWN_MEDIA');
   });
 
   test('撞名是整个文件夹的问题，所以整次入库停下，什么都不写', async () => {
